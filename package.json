@@ -1,0 +1,14 @@
+{
+  "name": "kovapreset",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Switch KovaaK's theme / crosshair / sound presets, live while the game is open.",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "core:test": "node src/core/selftest.js"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0"
+  }
+}
