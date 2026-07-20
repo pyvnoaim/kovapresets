@@ -1,0 +1,981 @@
+/* Fonts + tokens lifted verbatim from the Kova website (src/styles/globals.css
+ * and public/fonts) so the app matches the site. Space Grotesk = body, Fraunces
+ * = headings, JetBrains Mono = mono/values. */
+@font-face {
+  font-family: 'Space Grotesk';
+  src: url('fonts/space-grotesk-400.woff') format('woff');
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  src: url('fonts/space-grotesk-700.woff') format('woff');
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Fraunces';
+  src: url('fonts/fraunces-600.ttf') format('truetype');
+  font-weight: 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Kova Logo';
+  src: url('fonts/fraunces-italic-700.ttf') format('truetype');
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('fonts/jetbrains-mono-400.ttf') format('truetype');
+  font-weight: 400;
+  font-display: swap;
+}
+
+/* ---- palette: the site's exact token values, three-way (system/light/dark) --- */
+:root,
+:root.light {
+  --page: #fafafa;
+  --surface: #ffffff;
+  --surface-raised: #f4f4f5;
+  --border: #e4e4e7;
+  --border-strong: #a1a1aa;
+  --fg: #18181b;
+  --fg-subtle: #3f3f46;
+  --fg-muted: #6d6d76;
+  --accent: #ff9a9a;
+  --accent-contrast: #18181b;
+  --danger: #dc2626;
+  --success: #16a34a;
+  --warning: #d97706;
+  color-scheme: light;
+}
+
+/* One radius scale, applied by role (matches the site: surfaces xl, controls md,
+   pills/badges full). Mode-independent, so defined once on :root. */
+:root {
+  --radius-surface: 12px;
+  --radius-control: 8px;
+  --radius-pill: 999px;
+}
+
+/* system dark = OS prefers dark and no explicit choice made */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light):not(.dark) {
+    --page: #111114;
+    --surface: #1c1c1f;
+    --surface-raised: #27272a;
+    --border: #3f3f46;
+    --border-strong: #71717a;
+    --fg: #ffffff;
+    --fg-subtle: #d4d4d8;
+    --fg-muted: #a1a1aa;
+    --accent: #ff9a9a;
+    --accent-contrast: #18181b;
+    --danger: #f87171;
+    --success: #4ade80;
+    --warning: #fbbf24;
+    color-scheme: dark;
+  }
+}
+
+/* explicit dark */
+:root.dark {
+  --page: #111114;
+  --surface: #1c1c1f;
+  --surface-raised: #27272a;
+  --border: #3f3f46;
+  --border-strong: #71717a;
+  --fg: #ffffff;
+  --fg-subtle: #d4d4d8;
+  --fg-muted: #a1a1aa;
+  --accent: #ff9a9a;
+  --accent-contrast: #18181b;
+  --danger: #f87171;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+}
+html,
+body {
+  height: 100%;
+}
+body {
+  background: var(--page);
+  color: var(--fg);
+  font: 14px/1.5 'Space Grotesk', system-ui, sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.hidden {
+  display: none !important;
+}
+.muted {
+  color: var(--fg-muted);
+}
+
+/* topbar */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+.brand {
+  /* The display Fraunces (same face as the site's "kova." wordmark). */
+  font-family: 'Kova Logo', 'Fraunces', Georgia, serif;
+  font-size: 20px;
+  letter-spacing: 0.2px;
+}
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Navbar controls share one height so they line up. */
+.seg,
+#game-pill,
+#refresh {
+  height: 32px;
+}
+
+/* theme segmented control */
+.seg {
+  display: inline-flex;
+  align-items: center;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 2px;
+}
+.seg button {
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  padding: 0 12px;
+  height: 100%;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  line-height: 1;
+}
+.seg button:hover {
+  color: var(--fg);
+}
+.seg button.on {
+  background: var(--surface);
+  color: var(--fg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  padding: 0 12px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  font-family: 'JetBrains Mono', monospace;
+}
+.pill-on {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 40%, transparent);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+.pill-off {
+  color: var(--fg-muted);
+}
+
+/* layout */
+main {
+  padding: 22px;
+  max-width: 900px;
+  margin: 0 auto;
+}
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 26px 0 12px;
+}
+.section-head:first-child {
+  margin-top: 4px;
+}
+h2 {
+  font-family: 'Fraunces', Georgia, serif;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+/* buttons */
+button {
+  font: inherit;
+  cursor: pointer;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+  color: var(--fg);
+  padding: 8px 14px;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    transform 0.05s;
+}
+button:hover {
+  border-color: var(--border-strong);
+}
+button:active {
+  transform: translateY(1px);
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+button.primary:hover {
+  filter: brightness(1.05);
+}
+button.ghost {
+  background: transparent;
+  padding: 6px 10px;
+}
+/* refresh: square icon button matching the navbar height */
+#refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  padding: 0;
+  border-radius: var(--radius-pill);
+}
+button.danger:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* active setup grid */
+.active-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+.stat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-surface);
+  padding: 14px 16px;
+}
+.stat .label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--fg-muted);
+  margin-bottom: 6px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.stat .value {
+  font-weight: 600;
+  word-break: break-word;
+}
+.stat .sub {
+  color: var(--fg-muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.section-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* preset builder */
+.builder {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-surface);
+  padding: 16px;
+  margin-bottom: 14px;
+}
+.builder-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.field-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--fg-muted);
+}
+.field input[type='text'],
+.field select {
+  font: inherit;
+  color: var(--fg);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: 7px 10px;
+  outline: none;
+  min-width: 0;
+}
+.field input[type='text']:focus,
+.field select:focus {
+  border-color: var(--border-strong);
+}
+/* custom combobox dropdown */
+.combo {
+  position: relative;
+}
+.combo-list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 60;
+  margin-top: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.combo-item {
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.combo-item:hover,
+.combo-item.focus {
+  background: var(--surface-raised);
+}
+.combo-empty {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.combo-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.combo-ximg {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  background: #26262a;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+/* input with a trailing play button */
+.input-play {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.input-play input {
+  flex: 1;
+  min-width: 0;
+}
+.input-play button.play {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+}
+
+.color-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.color-row .muted {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+}
+.builder-note {
+  font-size: 12px;
+  margin-top: 12px;
+}
+.builder-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+/* presets */
+.presets {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.preset {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-surface);
+  padding: 12px 14px 12px 4px;
+  transition:
+    border-color 0.12s,
+    box-shadow 0.12s;
+}
+.preset:hover {
+  border-color: var(--border-strong);
+}
+.preset.dragging {
+  opacity: 0.45;
+}
+.preset .grip {
+  display: flex;
+  align-items: center;
+  color: var(--fg-subtle);
+  cursor: grab;
+  padding: 4px 0;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.preset:hover .grip {
+  opacity: 1;
+}
+.preset .grip:active {
+  cursor: grabbing;
+}
+.preset .grip svg {
+  width: 14px;
+  height: 14px;
+}
+/* leading crosshair tile - the preset's visual anchor */
+.preset .tile {
+  position: relative;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+}
+.xprev {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-control);
+  background: #212126;
+  border: 1px solid var(--border);
+  display: block;
+}
+/* color dot overlapping the tile corner (.preset .tile-color outranks the
+   generic .xcolor sizing that lives later in this sheet) */
+.preset .tile-color {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  width: 14px;
+  height: 14px;
+  padding: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  display: inline-flex;
+  cursor: pointer;
+}
+.preset .tile-color input[type='color'] {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-radius: var(--radius-pill);
+}
+.preset .tile-color input[type='color']::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+.preset .tile-color input[type='color']::-webkit-color-swatch {
+  border: none;
+  border-radius: var(--radius-pill);
+}
+/* sound preview buttons */
+button.play {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: transparent;
+  border-color: transparent;
+  color: var(--fg-subtle);
+  font-size: 10px;
+}
+button.play:hover {
+  color: var(--accent);
+  border-color: var(--border);
+}
+button.play svg {
+  width: 11px;
+  height: 11px;
+}
+/* hotkey chip */
+.preset .hotkey {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 30px;
+  min-width: 30px;
+  padding: 0 8px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--fg-muted);
+  background: transparent;
+}
+.preset .hotkey svg {
+  width: 13px;
+  height: 13px;
+}
+.preset .hotkey.has-key {
+  color: var(--fg);
+  border-color: var(--border-strong);
+}
+.preset .hotkey.recording {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+/* an unassigned hotkey chip stays out of the way until hover */
+.preset .hotkey:not(.has-key) {
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.preset:hover .hotkey:not(.has-key),
+.preset .hotkey.recording {
+  opacity: 1;
+}
+/* meta line: sound value + its play button sit together */
+.sm-sound {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+/* dup + del: invisible until the row is hovered, so Apply owns the row */
+.preset .quiet {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  background: transparent;
+  border-color: transparent;
+  color: var(--fg-subtle);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.preset:hover .quiet,
+.preset .quiet:focus-visible {
+  opacity: 1;
+}
+.preset .quiet svg {
+  width: 14px;
+  height: 14px;
+}
+.preset .dup:hover {
+  color: var(--fg);
+  border-color: var(--border);
+}
+.preset.active-preset {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent) inset;
+}
+.preset .info {
+  flex: 1;
+  min-width: 0;
+}
+/* Editable name: looks like a field so it's obviously renameable. */
+.name-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  margin: -3px -8px 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  cursor: text;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
+}
+.name-field:hover {
+  background: var(--surface-raised);
+  border-color: var(--border);
+}
+.name-field:focus-within {
+  background: var(--surface-raised);
+  border-color: var(--border-strong);
+}
+.name-field svg {
+  width: 13px;
+  height: 13px;
+  color: var(--fg-subtle);
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.name-field:hover svg,
+.name-field:focus-within svg {
+  opacity: 1;
+}
+.preset .name {
+  font-weight: 600;
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--fg);
+  background: transparent;
+  border: none;
+  outline: none;
+  padding: 0;
+  min-width: 0;
+  width: 100%;
+}
+.preset .summary {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-top: 5px;
+  min-width: 0;
+}
+.preset .summary .sm-val {
+  font-size: 12px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.preset .summary .sm-sep {
+  font-size: 12px;
+  color: var(--fg-subtle);
+}
+.preset .summary .sm-empty {
+  font-size: 12px;
+  color: var(--fg-subtle);
+}
+.preset .actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+/* Crosshair color swatch: a small round native color input. */
+.xcolor {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 3px;
+  cursor: pointer;
+  transition: border-color 0.12s;
+}
+.xcolor:hover {
+  border-color: var(--border-strong);
+}
+.xcolor input[type='color'] {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-radius: var(--radius-pill);
+}
+.xcolor input[type='color']::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+.xcolor input[type='color']::-webkit-color-swatch {
+  border: none;
+  border-radius: var(--radius-pill);
+}
+/* Small inline swatch that sits with the crosshair name in a preset summary. */
+.xcolor-sm {
+  width: 18px;
+  height: 18px;
+  padding: 2px;
+}
+.sm-xhair {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.preset .apply {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+.preset .apply svg {
+  width: 14px;
+  height: 14px;
+}
+/* Active preset: the Apply button becomes a calm, non-interactive marker. */
+.preset .apply.is-active {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border));
+  color: var(--success);
+  cursor: default;
+  font-weight: 600;
+}
+/* Delete: quiet icon button, turns red on hover so it never reads as primary. */
+.preset .del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  background: transparent;
+  border-color: transparent;
+  color: var(--fg-subtle);
+}
+.preset .del svg {
+  width: 15px;
+  height: 15px;
+}
+.preset .del:hover {
+  background: var(--danger-bg, color-mix(in srgb, var(--danger) 12%, transparent));
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  color: var(--danger);
+}
+
+/* HUD editor */
+#hud-canvas-wrap {
+  width: 100%;
+}
+#hud-canvas {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-surface);
+  overflow: hidden;
+  /* faint thirds grid for orientation */
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--border) 55%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--border) 55%, transparent) 1px, transparent 1px);
+  background-size: 33.333% 33.333%;
+}
+.hud-box {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 3px;
+  cursor: grab;
+  user-select: none;
+  overflow: hidden;
+}
+.hud-box:active {
+  cursor: grabbing;
+}
+.hud-box span {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--fg);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.hud-box.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+  z-index: 2;
+}
+/* corner calibration handle on a single-selected box */
+.hud-resize {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  width: 10px;
+  height: 10px;
+  background: var(--accent);
+  border-radius: 2px;
+  cursor: nwse-resize;
+  z-index: 5;
+}
+.hud-guide {
+  position: absolute;
+  background: var(--danger);
+  z-index: 3;
+  pointer-events: none;
+}
+.hud-guide-v {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+.hud-guide-h {
+  left: 0;
+  right: 0;
+  height: 1px;
+}
+/* screen-center lines get their own look so "true center" reads instantly */
+.hud-guide-center {
+  background: none;
+}
+.hud-guide-center.hud-guide-v {
+  border-left: 1px dashed var(--accent);
+}
+.hud-guide-center.hud-guide-h {
+  border-top: 1px dashed var(--accent);
+}
+/* equal-spacing gap bars with a px label */
+.hud-gap {
+  position: absolute;
+  z-index: 4;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.hud-gap-x {
+  height: 0;
+  border-top: 1px solid var(--warning);
+}
+.hud-gap-y {
+  width: 0;
+  border-left: 1px solid var(--warning);
+}
+.hud-gap i {
+  font-style: normal;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--warning);
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
+  border-radius: 3px;
+  padding: 1px 4px;
+  white-space: nowrap;
+}
+.hud-inspector {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-surface);
+  padding: 10px 14px;
+  margin-top: 12px;
+}
+.hud-inspector button {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+.hud-scale {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.hud-scale input[type='range'] {
+  width: 140px;
+  accent-color: var(--accent);
+}
+.hud-pos {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+}
+.hud-note {
+  font-size: 12px;
+  margin-top: 10px;
+}
+
+/* instant tooltips: any element with data-tip shows a styled bubble above it */
+[data-tip] {
+  position: relative;
+}
+[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 7px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--surface-raised);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  font-weight: 400;
+  line-height: 1.4;
+  white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+  z-index: 120;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s;
+  transition-delay: 0s;
+}
+[data-tip]:hover::after {
+  opacity: 1;
+  transition-delay: 0.35s;
+}
+
+/* toast */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  background: var(--surface);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-surface);
+  padding: 12px 18px;
+  max-width: 90%;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  animation: rise 0.2s ease;
+}
+.toast.ok {
+  border-color: color-mix(in srgb, var(--success) 50%, var(--border));
+}
+.toast.warn {
+  border-color: color-mix(in srgb, var(--warning) 55%, var(--border));
+}
+.toast.err {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+}
+.toast b {
+  color: var(--warning);
+}
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+}

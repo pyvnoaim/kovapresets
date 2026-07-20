@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline';" />
+    <title>KovaPreset</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span>KovaPreset</span>
+      </div>
+      <div class="topbar-right">
+        <div id="theme-seg" class="seg">
+          <button data-theme="system" title="Follow system">System</button>
+          <button data-theme="light" title="Light">Light</button>
+          <button data-theme="dark" title="Dark">Dark</button>
+        </div>
+        <span id="game-pill" class="pill pill-off">KovaaK's: checking…</span>
+        <button id="refresh" class="ghost" title="Re-scan install &amp; game state">↻</button>
+      </div>
+    </header>
+
+    <main id="app">
+      <section id="not-found" class="panel hidden">
+        <h2>KovaaK's not found</h2>
+        <p class="muted">Couldn't locate a KovaaK's (FPSAimTrainer) install via Steam. Make sure it's installed, then hit ↻.</p>
+      </section>
+
+      <section id="content" class="hidden">
+        <div class="section-head">
+          <h2>Active setup</h2>
+          <div class="section-actions">
+            <button id="undo" class="hidden" title="Restore the files from before the last apply">Undo last apply</button>
+            <button id="open-hud">HUD editor</button>
+            <button id="capture" class="primary">Capture as preset</button>
+          </div>
+        </div>
+        <div id="active" class="active-grid"></div>
+
+        <div class="section-head">
+          <h2>Presets</h2>
+          <div class="section-actions">
+            <span id="preset-count" class="muted"></span>
+            <button id="toggle-builder">New preset</button>
+          </div>
+        </div>
+
+        <div id="builder" class="builder hidden">
+          <div class="builder-grid">
+            <label class="field">
+              <span class="field-label">Name</span>
+              <input id="b-name" type="text" placeholder="My preset" spellcheck="false" />
+            </label>
+            <label class="field">
+              <span class="field-label">Theme</span>
+              <input id="b-theme" type="text" placeholder="Search themes…" spellcheck="false" />
+            </label>
+            <label class="field">
+              <span class="field-label">Crosshair</span>
+              <input id="b-crosshair" type="text" placeholder="Search crosshairs…" spellcheck="false" />
+            </label>
+            <label class="field">
+              <span class="field-label">Crosshair color</span>
+              <div class="color-row">
+                <label class="xcolor"><input id="b-color" type="color" value="#ffffff" /></label>
+                <span id="b-color-hex" class="muted">#ffffff</span>
+              </div>
+            </label>
+            <label class="field">
+              <span class="field-label">Hit sound</span>
+              <div class="input-play">
+                <input id="b-sound" type="text" placeholder="Search sounds…" spellcheck="false" />
+                <button id="b-sound-play" class="play" title="Preview" type="button">▶</button>
+              </div>
+            </label>
+            <label class="field">
+              <span class="field-label">Kill sound</span>
+              <div class="input-play">
+                <input id="b-killsound" type="text" placeholder="Search sounds…" spellcheck="false" />
+                <button id="b-killsound-play" class="play" title="Preview" type="button">▶</button>
+              </div>
+            </label>
+          </div>
+          <p class="builder-note muted">
+            Palette, HUD layout, and pitch/volume settings are carried over from your current setup.
+          </p>
+          <div class="builder-actions">
+            <button id="b-cancel">Cancel</button>
+            <button id="b-create" class="primary">Create preset</button>
+          </div>
+        </div>
+        <div id="presets" class="presets"></div>
+        <p id="empty" class="muted hidden">No presets yet. Set up KovaaK's how you like, then hit <b>Capture as preset</b>.</p>
+      </section>
+      <section id="hud-view" class="hidden">
+        <div class="section-head">
+          <h2>HUD editor</h2>
+          <div class="section-actions">
+            <span id="hud-hint" class="muted"></span>
+            <button id="hud-cancel">Back</button>
+            <button id="hud-save" class="primary">Save layout</button>
+          </div>
+        </div>
+        <div id="hud-canvas-wrap">
+          <div id="hud-canvas"></div>
+        </div>
+        <div id="hud-inspector" class="hud-inspector hidden">
+          <span id="hud-sel-name" class="field-label"></span>
+          <span class="hud-pos muted" id="hud-sel-pos"></span>
+          <label class="hud-scale">
+            <span class="field-label">Scale</span>
+            <input id="hud-sel-scale" type="range" min="0.25" max="2" step="0.01" />
+            <span id="hud-sel-scale-val" class="muted"></span>
+          </label>
+          <button id="hud-center-h">Center horizontally</button>
+          <button id="hud-center-v">Center vertically</button>
+        </div>
+        <div id="hud-align" class="hud-inspector hidden">
+          <span class="field-label">Align <span id="hud-align-count"></span></span>
+          <button data-align="left">Left</button>
+          <button data-align="hcenter">H-center</button>
+          <button data-align="right">Right</button>
+          <button data-align="top">Top</button>
+          <button data-align="vcenter">V-center</button>
+          <button data-align="bottom">Bottom</button>
+          <span class="field-label">Distribute</span>
+          <button data-align="disth">Horizontally</button>
+          <button data-align="distv">Vertically</button>
+        </div>
+        <p class="muted hud-note">
+          Drag windows to reposition — they snap to screen center, edges, other windows, and
+          equal spacing. Shift-click to multi-select for align/distribute. Arrow keys nudge 1px
+          (Shift = 10px). Drag the corner handle of a selected window to calibrate its real size.
+          Layout applies when KovaaK's is closed, or queues for its next quit.
+        </p>
+      </section>
+    </main>
+
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="renderer.js"></script>
+    <script src="hud.js"></script>
+  </body>
+</html>
