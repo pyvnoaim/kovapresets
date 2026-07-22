@@ -27,6 +27,15 @@ const WEAPON_KEYS = [
   'EnableMissSound',
   'MissSound',
   'MissPitchShiftPerDeg',
+  // per-file sens override - weaponsettings reloads on scenario entry, so this
+  // is the LIVE half of scenario-specific sens presets (global sens + DPI live
+  // in PrimaryUserSettings and only apply on launch/quit-flush)
+  'OverrideSens',
+  'HorizontalSens',
+  'VerticalSens',
+  'SensScale',
+  'OverrideSensScaleString',
+  'ZoomSensMultiplier',
 ]
 
 // --- PrimaryUserSettings.json: the managed theme + event-sound fields, by
@@ -44,6 +53,7 @@ const PRIMARY_MANAGED = {
     'MBSOkaySound',
     'MBSBadSound',
     'MBSChangeNowSound',
+    'SensScaleString',
   ],
   floatSettings: [
     'WallRoughness', 'WallMetallic', 'WallFullBright', 'WallTextureScale',
@@ -56,10 +66,12 @@ const PRIMARY_MANAGED = {
     'EnemyGlowUpHeadOnLookAt', 'EnemyGlowUpBodyOnLookAt',
     // sound pitch/volume (hit, crit/headshot, enemy)
     'HitPitch', 'HitVolume', 'CritPitch', 'CritVolume', 'EnemyPitch', 'EnemyVolume',
+    // global sensitivity (the in-game settings values; DPI sits in integerSettings)
+    'XSens', 'YSens',
   ],
   // WallMat/FloorMat are the material INDEX the game actually renders from; keep
   // them alongside the material string so a captured theme stays consistent.
-  integerSettings: ['SkyPreset', 'CloudCover', 'WallMat', 'FloorMat'],
+  integerSettings: ['SkyPreset', 'CloudCover', 'WallMat', 'FloorMat', 'DPI', 'SensitivityScaleTargetEnum'],
   booleanSettings: [
     'OverrideEnemyHeadColor',
     'OverrideEnemyBodyColor',

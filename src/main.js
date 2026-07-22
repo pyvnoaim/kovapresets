@@ -30,6 +30,12 @@ function createWindow() {
     backgroundColor: '#111114',
     title: 'KovaPresets',
     icon: path.join(__dirname, 'assets', 'tray.ico'),
+    // Riot-client-style chrome: fully frameless, the app's own topbar is the
+    // drag region and renders its own caption buttons (the Windows overlay
+    // buttons drew oversized/missing hover states at this bar height).
+    // minimize + close only - no maximize, incl. via titlebar double-click.
+    frame: false,
+    maximizable: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -161,48 +167,32 @@ function flushPendingIfPossible() {
   return true
 }
 
-// ---- undo: snapshot game files before every apply -----------------------------
-const MAX_BACKUPS = 10
-const backupsDir = () => path.join(userData(), 'backups')
+// ---- baseline: the user's own setup, captured before the first apply -----------
+// One snapshot, taken only when none exists, so "Restore original setup" always
+// returns to the state before KovaPresets touched anything - not one step back
+// like the old per-apply undo. Cleared on restore; the next apply recaptures.
+const baselineDir = () => path.join(userData(), 'baseline')
+const hasBaseline = () => fs.existsSync(path.join(baselineDir(), 'weapon.bak'))
 
-function snapshotBeforeApply(install) {
+function captureBaselineIfMissing(install) {
+  if (hasBaseline()) return
   const p = {
     weapon: path.join(install, 'Saved', 'SaveGames', 'weaponsettings.ini'),
     primary: path.join(install, 'Saved', 'SaveGames', 'PrimaryUserSettings.json'),
     proxy: path.join(install, 'Saved', 'SaveGames', 'Themes', `${k.PROXY_THEME}.json`),
   }
-  const dir = path.join(backupsDir(), String(Date.now()))
+  const dir = baselineDir()
   fs.mkdirSync(dir, { recursive: true })
   const active = k.readActive(install)
   for (const [name, file] of Object.entries(p))
     if (fs.existsSync(file)) fs.copyFileSync(file, path.join(dir, `${name}.bak`))
   if (active.palette != null) fs.writeFileSync(path.join(dir, 'palette.bak'), active.palette)
   if (active.ui != null) fs.writeFileSync(path.join(dir, 'ui.bak'), active.ui)
-  // prune oldest beyond the cap
-  const all = fs
-    .readdirSync(backupsDir())
-    .filter((d) => /^\d+$/.test(d))
-    .sort((a, b) => Number(a) - Number(b))
-  while (all.length > MAX_BACKUPS) {
-    fs.rmSync(path.join(backupsDir(), all.shift()), { recursive: true, force: true })
-  }
 }
 
-function latestBackup() {
-  try {
-    const all = fs
-      .readdirSync(backupsDir())
-      .filter((d) => /^\d+$/.test(d))
-      .sort((a, b) => Number(b) - Number(a))
-    return all.length ? path.join(backupsDir(), all[0]) : null
-  } catch {
-    return null
-  }
-}
-
-function undoLastApply() {
-  const dir = latestBackup()
-  if (!dir) return { ok: false, error: 'Nothing to undo.' }
+function deactivatePresets() {
+  if (!hasBaseline()) return { ok: false, error: 'Nothing to restore.' }
+  const dir = baselineDir()
   const install = requireInstall()
   const running = k.isGameRunning()
   const read = (n) => {
@@ -225,17 +215,19 @@ function undoLastApply() {
   const ui = read('ui.bak')
   let queued = false
   if (running) {
-    // stash restores the running game would clobber on exit; the quit flush
-    // writes them (weapon is restored live above, but re-asserted at quit too)
-    const pending = readPending() || {}
+    // A restore supersedes EVERYTHING queued - start from an empty pending, or
+    // a leftover preset intent with no baseline counterpart (e.g. a queued
+    // palette when no palette file existed at capture) would re-apply part of
+    // the preset after the restore, on game quit.
+    const pending = {}
     if (weapon != null) pending.weaponRaw = weapon
     if (primaryRaw != null) pending.primaryRaw = primaryRaw
     if (palette != null) pending.palette = palette
     if (ui != null) pending.ui = ui
-    delete pending.weapon // raw restore supersedes a queued preset intent
     setPending(pending)
     queued = primaryRaw != null || palette != null || ui != null
-  } else if (primaryRaw != null || palette != null || ui != null) {
+  } else {
+    clearPending() // same reasoning - drop any not-yet-flushed preset intents
     if (primaryRaw != null)
       fs.writeFileSync(
         path.join(install, 'Saved', 'SaveGames', 'PrimaryUserSettings.json'),
@@ -244,7 +236,7 @@ function undoLastApply() {
     if (palette != null) k.applyPalette(install, palette)
     if (ui != null) k.applyUi(install, ui)
   }
-  fs.rmSync(dir, { recursive: true, force: true }) // undo consumes the backup
+  fs.rmSync(dir, { recursive: true, force: true }) // restored - next apply recaptures
   return { ok: true, queued }
 }
 
@@ -252,7 +244,7 @@ function undoLastApply() {
 function doApplyPreset(preset) {
   const install = requireInstall()
   const running = k.isGameRunning()
-  snapshotBeforeApply(install)
+  captureBaselineIfMissing(install)
   const weaponChanged = k.applyWeapon(install, preset.weapon)
   // The game rewrites weaponsettings.ini from memory on exit, so an apply it
   // never re-read (no scenario re-entry) gets reverted at quit. Queue the
@@ -410,7 +402,7 @@ ipcMain.handle('state', () => {
     presets: loadPresetsMigrated(install),
     pending: !!pending,
     resolution: k.readResolution(),
-    canUndo: !!latestBackup(),
+    canRestore: hasBaseline(),
   }
 })
 
@@ -429,6 +421,14 @@ ipcMain.handle('presets:build', (_e, picks) => {
   if (picks.crosshair) weapon.CrosshairFile = picks.crosshair
   if (picks.crosshairColor) weapon.CrosshairColor = picks.crosshairColor
   if (picks.bodyHit != null) weapon.BodyHitSound = picks.bodyHit
+  const sens = Number(picks.sens)
+  if (picks.sens != null && Number.isFinite(sens) && sens > 0) {
+    // scenario sens override: lives in weaponsettings.ini, so it goes live on
+    // scenario entry; the scale stays whatever the player already uses
+    weapon.OverrideSens = 'true'
+    weapon.HorizontalSens = String(sens)
+    weapon.VerticalSens = String(sens)
+  }
 
   const primary = JSON.parse(JSON.stringify(active.primary))
   if (picks.theme) {
@@ -442,6 +442,11 @@ ipcMain.handle('presets:build', (_e, picks) => {
   if (picks.killSound != null) {
     if (!primary.stringSettings) primary.stringSettings = {}
     primary.stringSettings.KillConfirmedSound = picks.killSound
+  }
+  const dpi = Number(picks.dpi)
+  if (picks.dpi != null && Number.isFinite(dpi) && dpi > 0) {
+    if (!primary.integerSettings) primary.integerSettings = {}
+    primary.integerSettings.DPI = Math.round(dpi)
   }
 
   const presets = store.load(userData())
@@ -514,7 +519,7 @@ ipcMain.handle('presets:setHotkey', (_e, id, hotkey) => {
 
 ipcMain.handle('preset:apply', (_e, preset) => doApplyPreset(preset))
 
-ipcMain.handle('undo:last', () => undoLastApply())
+ipcMain.handle('presets:deactivate', () => deactivatePresets())
 
 ipcMain.handle('game:restart', () => doRestartScenario())
 
@@ -522,6 +527,9 @@ ipcMain.handle('game:launch', () => {
   shell.openExternal(`steam://rungameid/${STEAM_APP_ID}`)
   return { ok: true }
 })
+
+ipcMain.handle('win:minimize', () => win?.minimize())
+ipcMain.handle('win:close', () => win?.close()) // routes through close-to-tray
 
 ipcMain.handle('settings:get', () => loadSettings())
 

@@ -59,6 +59,128 @@ function hexToColor(hex) {
   return `X=${v(0)} Y=${v(2)} Z=${v(4)}`
 }
 
+// ---- popover color picker (vanilla port of the website's ColorPicker) ---------
+// One shared fixed-position popover: SV pad + hue slider + hex field. Fixed so
+// no row/scroller overflow can clip it. Hue lives in state - it can't be
+// derived from a gray/black/white hex and must survive edge drags.
+const cpick = (() => {
+  const HEX6 = /^#?([0-9a-f]{6})$/i
+  function hexToHsv(hex) {
+    const m = HEX6.exec(hex || '')
+    if (!m) return { h: 0, s: 0.75, v: 0.85 }
+    const n = parseInt(m[1], 16)
+    const r = ((n >> 16) & 0xff) / 255
+    const g = ((n >> 8) & 0xff) / 255
+    const b = (n & 0xff) / 255
+    const max = Math.max(r, g, b)
+    const min = Math.min(r, g, b)
+    const d = max - min
+    let h = 0
+    if (d) {
+      if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) * 60
+      else if (max === g) h = ((b - r) / d + 2) * 60
+      else h = ((r - g) / d + 4) * 60
+    }
+    return { h, s: max === 0 ? 0 : d / max, v: max }
+  }
+  function hsvToHex(h, s, v) {
+    const f = (n) => {
+      const k = (n + h / 60) % 6
+      return v - v * s * Math.max(0, Math.min(k, 4 - k, 1))
+    }
+    const toHex = (x) => Math.round(x * 255).toString(16).padStart(2, '0')
+    return `#${toHex(f(5))}${toHex(f(3))}${toHex(f(1))}`
+  }
+  let el, svEl, dotEl, hueEl, hexEl, swatchEl
+  let state = null // { anchor, value, hue, onChange }
+  function build() {
+    el = document.createElement('div')
+    el.className = 'color-pop hidden'
+    el.innerHTML = `
+      <div class="cp-sv"><span class="cp-dot"></span></div>
+      <input class="cp-hue" type="range" min="0" max="360" step="1" aria-label="hue" />
+      <div class="cp-hexrow"><span class="cp-swatch"></span><input class="cp-hex" maxlength="7" spellcheck="false" aria-label="hex color" /></div>`
+    document.body.appendChild(el)
+    svEl = el.querySelector('.cp-sv')
+    dotEl = el.querySelector('.cp-dot')
+    hueEl = el.querySelector('.cp-hue')
+    hexEl = el.querySelector('.cp-hex')
+    swatchEl = el.querySelector('.cp-swatch')
+    const pickSv = (e) => {
+      if (!state) return
+      const r = svEl.getBoundingClientRect()
+      const s = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width))
+      const v = 1 - Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))
+      set(hsvToHex(state.hue, s, v))
+    }
+    svEl.addEventListener('pointerdown', (e) => {
+      e.preventDefault()
+      svEl.setPointerCapture(e.pointerId)
+      pickSv(e)
+    })
+    svEl.addEventListener('pointermove', (e) => {
+      if (e.buttons) pickSv(e)
+    })
+    hueEl.addEventListener('input', () => {
+      if (!state) return
+      state.hue = Number(hueEl.value)
+      const { s, v } = hexToHsv(state.value)
+      set(hsvToHex(state.hue, s, v))
+    })
+    hexEl.addEventListener('input', () => {
+      if (!state) return
+      const raw = hexEl.value.trim()
+      if (!HEX6.test(raw)) return
+      const norm = (raw.startsWith('#') ? raw : `#${raw}`).toLowerCase()
+      const { h, s, v } = hexToHsv(norm)
+      if (s > 0 && v > 0) state.hue = h
+      set(norm, true)
+    })
+    document.addEventListener('mousedown', (e) => {
+      if (state && !el.contains(e.target) && !state.anchor.contains(e.target)) close()
+    })
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') close()
+    })
+    // the popover is fixed - scrolling the list under it would detach it
+    document.addEventListener('scroll', close, true)
+  }
+  function set(hexVal, fromHexInput) {
+    state.value = hexVal
+    paint(fromHexInput)
+    state.onChange(hexVal)
+  }
+  function paint(skipHexInput) {
+    const { s, v } = hexToHsv(state.value)
+    svEl.style.backgroundColor = `hsl(${state.hue} 100% 50%)`
+    dotEl.style.left = `${s * 100}%`
+    dotEl.style.top = `${(1 - v) * 100}%`
+    dotEl.style.background = state.value
+    swatchEl.style.background = state.value
+    hueEl.value = Math.round(state.hue)
+    if (!skipHexInput) hexEl.value = state.value
+  }
+  function close() {
+    if (el) el.classList.add('hidden')
+    state = null
+  }
+  function show(anchor, value, onChange) {
+    if (!el) build()
+    if (state && state.anchor === anchor) return close() // second click toggles
+    state = { anchor, value, hue: hexToHsv(value).h, onChange }
+    el.classList.remove('hidden')
+    paint()
+    const a = anchor.getBoundingClientRect()
+    el.style.left = `${Math.min(Math.max(8, a.left), window.innerWidth - el.offsetWidth - 8)}px`
+    const below = a.bottom + 8
+    el.style.top =
+      below + el.offsetHeight > window.innerHeight - 8
+        ? `${Math.max(8, a.top - el.offsetHeight - 8)}px`
+        : `${below}px`
+  }
+  return { show, close, isOpen: () => !!state }
+})()
+
 // ---- local-file previews ------------------------------------------------------
 function fileUrl(...parts) {
   const p = parts.join('/').replace(/\\/g, '/')
@@ -136,6 +258,16 @@ const crosshair = (snap) => snap?.weapon?.CrosshairFile || ''
 // display-only: "OPDot.png" reads better as "OPDot" (files keep the extension)
 const noExt = (f) => String(f || '').replace(/\.[a-z0-9]+$/i, '')
 const bodyHit = (snap) => snap?.weapon?.BodyHitSound || ''
+// effective sens: the weapon-file override when on (live per scenario), else
+// the global settings value
+const sensOf = (snap) => {
+  const w = snap?.weapon || {}
+  if (String(w.OverrideSens).toLowerCase() === 'true' && w.HorizontalSens != null)
+    return { value: w.HorizontalSens, scale: w.SensScale || '', override: true }
+  const x = snap?.primary?.floatSettings?.XSens
+  if (x == null) return null
+  return { value: x, scale: snap?.primary?.stringSettings?.SensScaleString || '', override: false }
+}
 
 // Is preset P exactly what's active now? (every field the preset specifies matches;
 // CurrentThemeName is excluded - the live-switch proxy pins it to "KovaPreset")
@@ -171,9 +303,11 @@ function summaryHtml(preset) {
   const parts = []
   if (themeName(preset)) parts.push(`<span class="sm-val">${esc(themeName(preset))}</span>`)
   if (crosshair(preset)) parts.push(`<span class="sm-val">${esc(noExt(crosshair(preset)))}</span>`)
+  const sens = sensOf(preset)
+  if (sens) parts.push(`<span class="sm-val">${esc(Math.round(Number(sens.value) * 100) / 100)} sens</span>`)
   if (bodyHit(preset))
     parts.push(
-      `<span class="sm-val sm-sound">${esc(bodyHit(preset))}<button class="play play-hit" data-tip="Preview">${ICON.play}</button></span>`
+      `<span class="sm-val sm-sound">${esc(bodyHit(preset))}<button class="play play-hit" title="Preview">${ICON.play}</button></span>`
     )
   if (!parts.length) return '<span class="sm-empty">no changes</span>'
   return parts.join('<span class="sm-sep">·</span>')
@@ -185,7 +319,7 @@ function summaryHtml(preset) {
 // matches the active state (theme fields, not the label).
 function activeThemeLabel(active, presets) {
   const raw = active.primary?.stringSettings?.CurrentThemeName || ''
-  if (raw !== '!KovaPreset' && raw !== 'KovaPreset') return raw
+  if (raw !== '!KovaPreset' && raw !== 'KovaPreset') return { name: raw, liveSwap: false }
   const match = (presets || []).find((p) => {
     for (const section of Object.keys(p.primary || {}))
       for (const [key, val] of Object.entries(p.primary[section] || {})) {
@@ -195,8 +329,10 @@ function activeThemeLabel(active, presets) {
       }
     return true
   })
+  // liveSwap: the game is on the proxy theme, so theme applies swap without a
+  // game restart (shown as a sub-line, not glued to the name)
   const real = match ? themeName(match) : ''
-  return real ? `${real} (live)` : 'custom (live)'
+  return { name: real || 'custom', liveSwap: true }
 }
 
 function renderActive(active) {
@@ -204,13 +340,17 @@ function renderActive(active) {
   const s = active.primary?.stringSettings || {}
   const f = active.primary?.floatSettings || {}
   const round2 = (v) => Math.round(v * 100) / 100
+  const theme = activeThemeLabel(active, current?.presets)
+  const sens = sensOf(active)
+  const dpi = active.primary?.integerSettings?.DPI
   const hitBits = []
   if (f.HitPitch != null) hitBits.push(`pitch ${round2(f.HitPitch)}`)
   if (f.HitVolume != null) hitBits.push(`volume ${round2(f.HitVolume)}`)
   $('#active').innerHTML = `
     <div class="stat">
       <div class="label">Theme</div>
-      <div class="value">${esc(activeThemeLabel(active, current?.presets)) || '-'}</div>
+      <div class="value">${esc(theme.name) || '-'}</div>
+      ${theme.liveSwap ? '<div class="sub" data-tip="The game runs the !KovaPreset proxy theme, so theme changes apply without restarting - just open settings once">live swap on</div>' : ''}
     </div>
     <div class="stat">
       <div class="label">Crosshair</div>
@@ -223,9 +363,14 @@ function renderActive(active) {
       ${hitBits.length ? `<div class="sub">${hitBits.join(' · ')}</div>` : ''}
     </div>
     <div class="stat">
-      <div class="label">Kill / spawn sound</div>
+      <div class="label">Kill / spawn</div>
       <div class="value">${esc(s.KillConfirmedSound) || '-'}</div>
-      <div class="sub">spawn ${esc(s.SpawnSound) || '-'}</div>
+      <div class="sub">${esc(s.SpawnSound) || '-'}</div>
+    </div>
+    <div class="stat">
+      <div class="label">Sens / DPI</div>
+      <div class="value">${sens ? `${esc(round2(Number(sens.value)))} ${esc(sens.scale)}` : '-'}</div>
+      <div class="sub">${[dpi != null ? `DPI ${esc(dpi)}` : '', sens?.override ? 'scenario override' : ''].filter(Boolean).join(' · ') || '&nbsp;'}</div>
     </div>`
 }
 
@@ -244,7 +389,7 @@ function renderPresets(presets, active) {
       <div class="grip" data-tip="Drag to reorder">${ICON.grip}</div>
       <div class="tile">
         <canvas class="xprev" width="44" height="44"></canvas>
-        <label class="xcolor tile-color" data-tip="Crosshair color"><input type="color" value="${colorToHex(preset.weapon?.CrosshairColor)}" aria-label="Crosshair color" /></label>
+        <button type="button" class="xcolor tile-color" data-tip="Crosshair color" aria-label="Crosshair color"><span class="cp-mini" style="background:${colorToHex(preset.weapon?.CrosshairColor)}"></span></button>
       </div>
       <div class="info">
         <label class="name-field" title="Click to rename">
@@ -277,17 +422,27 @@ function renderPresets(presets, active) {
       if (e.key === 'Enter') input.blur()
     })
 
-    const colorInput = row.querySelector('.xcolor input')
-    if (colorInput)
-      colorInput.addEventListener('change', async (e) => {
-        current.presets = await window.kova.updateWeapon(preset.id, {
-          CrosshairColor: hexToColor(e.target.value),
-        })
-        renderPresets(current.presets, current.active)
-      })
-
     const xprev = row.querySelector('.xprev')
     if (xprev) drawCrosshair(xprev, crosshair(preset), preset.weapon?.CrosshairColor)
+
+    const colorBtn = row.querySelector('.xcolor')
+    if (colorBtn) {
+      let commitTimer
+      colorBtn.addEventListener('click', () => {
+        cpick.show(colorBtn, colorToHex(preset.weapon?.CrosshairColor), (hexVal) => {
+          // live preview on the row; the store write is debounced, and there's
+          // no re-render here - it would tear the open popover out of the DOM
+          const cc = hexToColor(hexVal)
+          preset.weapon.CrosshairColor = cc
+          colorBtn.firstElementChild.style.background = hexVal
+          if (xprev) drawCrosshair(xprev, crosshair(preset), cc)
+          clearTimeout(commitTimer)
+          commitTimer = setTimeout(async () => {
+            current.presets = await window.kova.updateWeapon(preset.id, { CrosshairColor: cc })
+          }, 250)
+        })
+      })
+    }
     const playBtn = row.querySelector('.play-hit')
     if (playBtn) playBtn.addEventListener('click', () => playSound(bodyHit(preset)))
 
@@ -319,6 +474,9 @@ function renderPresets(presets, active) {
       grip.setPointerCapture(e.pointerId)
       dragReordering = true
       row.classList.add('dragging')
+      // :active on the grip dies when the row is re-inserted mid-drag - pin the
+      // grabbing cursor globally until the pointer is released
+      document.body.classList.add('row-dragging')
       const rows = () => [...wrap.querySelectorAll('.preset')]
       const move = (ev) => {
         const target = rows().find(
@@ -343,6 +501,7 @@ function renderPresets(presets, active) {
         window.removeEventListener('pointerup', finish)
         window.removeEventListener('pointercancel', finish)
         row.classList.remove('dragging')
+        document.body.classList.remove('row-dragging')
         dragReordering = false
         current.presets = await window.kova.reorder(rows().map((el) => el.dataset.id))
         renderPresets(current.presets, current.active)
@@ -445,6 +604,7 @@ async function refresh() {
   if (!$('#builder').classList.contains('hidden')) return
   if (document.querySelector('#hud-view:not(.hidden)')) return
   if (dragReordering) return
+  if (cpick.isOpen()) return // a re-render would tear out the popover's anchor
   current = await window.kova.state()
   const pill = $('#game-pill')
   if (!current.install) {
@@ -459,7 +619,7 @@ async function refresh() {
   pill.textContent = current.gameRunning ? "KovaaK's: running" : "KovaaK's: closed"
   pill.className = 'pill ' + (current.gameRunning ? 'pill-on' : 'pill-off')
   $('#launch').classList.toggle('hidden', current.gameRunning)
-  $('#undo').classList.toggle('hidden', !current.canUndo)
+  $('#deactivate').classList.toggle('hidden', !current.canRestore)
   // capturing a setup that's already saved would only create a duplicate
   const alreadySaved = (current.presets || []).some((p) => isActive(p, current.active))
   const cap = $('#capture')
@@ -561,14 +721,22 @@ makeCombo($('#b-killsound'), () => current?.options?.sounds || [])
 function populateBuilder() {
   if (!current?.options) return
   // placeholders show what "leave empty" keeps
-  $('#b-theme').placeholder = `keep current (${themeName(current.active) || 'none'})`
+  $('#b-theme').placeholder = `keep current (${activeThemeLabel(current.active, current.presets).name || 'none'})`
   $('#b-crosshair').placeholder = `keep current (${noExt(crosshair(current.active)) || 'none'})`
   $('#b-sound').placeholder = `keep current (${bodyHit(current.active) || 'none'})`
+  const curSens = sensOf(current.active)
+  $('#b-sens').placeholder =
+    `keep current (${curSens ? Math.round(Number(curSens.value) * 100) / 100 : 'none'})`
+  $('#b-dpi').placeholder =
+    `keep current (${current.active.primary?.integerSettings?.DPI ?? 'none'})`
   const hex = colorToHex(current.active?.weapon?.CrosshairColor)
-  $('#b-color').value = hex
+  $('#b-color').dataset.value = hex
+  $('#b-color').firstElementChild.style.background = hex
   $('#b-color-hex').textContent = hex
   $('#b-name').value = ''
   $('#b-theme').value = ''
+  $('#b-sens').value = ''
+  $('#b-dpi').value = ''
   $('#b-crosshair').value = ''
   $('#b-sound').value = ''
   $('#b-killsound').value = ''
@@ -580,8 +748,13 @@ $('#toggle-builder').addEventListener('click', () => {
   builder.classList.toggle('hidden', !show)
 })
 $('#b-cancel').addEventListener('click', () => builder.classList.add('hidden'))
-$('#b-color').addEventListener('input', (e) => {
-  $('#b-color-hex').textContent = e.target.value
+$('#b-color').addEventListener('click', () => {
+  const btn = $('#b-color')
+  cpick.show(btn, btn.dataset.value || '#ffffff', (hexVal) => {
+    btn.dataset.value = hexVal
+    btn.firstElementChild.style.background = hexVal
+    $('#b-color-hex').textContent = hexVal
+  })
 })
 $('#b-create').addEventListener('click', async () => {
   const opts = current?.options
@@ -592,15 +765,25 @@ $('#b-create').addEventListener('click', async () => {
     if (!list.includes(v)) throw new Error(`"${v}" is not an installed ${label}`)
     return v
   }
+  const numPick = (id, label, integer) => {
+    const v = $(id).value.trim()
+    if (!v) return null
+    const n = Number(v)
+    if (Number.isNaN(n) || n <= 0 || (integer && !Number.isInteger(n)))
+      throw new Error(`"${v}" isn't a valid ${label}`)
+    return n
+  }
   let picks
   try {
     picks = {
       name: $('#b-name').value.trim() || `Preset ${(current?.presets?.length || 0) + 1}`,
       theme: pick('#b-theme', opts.themes, 'theme'),
       crosshair: pick('#b-crosshair', opts.crosshairs, 'crosshair'),
-      crosshairColor: hexToColor($('#b-color').value),
+      crosshairColor: hexToColor($('#b-color').dataset.value || '#ffffff'),
       bodyHit: pick('#b-sound', opts.sounds, 'sound'),
       killSound: pick('#b-killsound', opts.sounds, 'sound'),
+      sens: numPick('#b-sens', 'sens', false),
+      dpi: numPick('#b-dpi', 'DPI', true),
     }
   } catch (err) {
     return toast(esc(err.message), 'err')
@@ -611,6 +794,8 @@ $('#b-create').addEventListener('click', async () => {
   toast('Preset created.', 'ok')
 })
 $('#refresh').addEventListener('click', refresh)
+$('#win-min').addEventListener('click', () => window.kova.winMinimize())
+$('#win-close').addEventListener('click', () => window.kova.winClose())
 $('#launch').addEventListener('click', async () => {
   await window.kova.launchGame()
   toast("Launching KovaaK's via Steam…", 'ok')
@@ -643,14 +828,14 @@ $('#auto-restart').addEventListener('change', async (e) => {
   )
 })
 loadSettingsUi()
-$('#undo').addEventListener('click', async () => {
-  const res = await window.kova.undoLast()
+$('#deactivate').addEventListener('click', async () => {
+  const res = await window.kova.deactivate()
   await refresh()
-  if (!res.ok) return toast(esc(res.error || 'Nothing to undo.'), 'warn')
+  if (!res.ok) return toast(esc(res.error || 'Nothing to restore.'), 'warn')
   toast(
     res.queued
-      ? 'Reverted. Some settings restore when you quit KovaaK\'s; crosshair/sounds are already back.'
-      : 'Reverted to the state before the last apply.',
+      ? "Original setup restored. Theme/layout finish restoring when you quit KovaaK's; crosshair & sounds are already back."
+      : 'Original setup restored - everything is as it was before KovaPresets.',
     'ok'
   )
 })

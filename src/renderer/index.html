@@ -21,6 +21,10 @@
         <button id="launch" class="ghost hidden" title="Launch KovaaK's via Steam">Launch</button>
         <button id="refresh" class="ghost" title="Re-scan install &amp; game state">↻</button>
       </div>
+      <div class="win-controls">
+        <button id="win-min" aria-label="Minimize" title="Minimize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg></button>
+        <button id="win-close" aria-label="Close" title="Close to tray"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
     </header>
 
     <main id="app">
@@ -33,7 +37,7 @@
         <div class="section-head">
           <h2>Active setup</h2>
           <div class="section-actions">
-            <button id="undo" class="hidden" title="Restore the files from before the last apply">Undo last apply</button>
+            <button id="deactivate" class="hidden" title="Put every setting back to how it was before KovaPresets applied anything">Restore original setup</button>
             <button id="open-hud">HUD editor</button>
             <button id="capture">Capture as preset</button>
           </div>
@@ -66,7 +70,7 @@
             <label class="field">
               <span class="field-label">Crosshair color</span>
               <div class="color-row">
-                <label class="xcolor"><input id="b-color" type="color" value="#ffffff" /></label>
+                <button type="button" id="b-color" class="xcolor" data-value="#ffffff" aria-label="Crosshair color"><span class="cp-mini" style="background: #ffffff"></span></button>
                 <span id="b-color-hex" class="muted">#ffffff</span>
               </div>
             </label>
@@ -84,9 +88,18 @@
                 <button id="b-killsound-play" class="play" title="Preview" type="button">▶</button>
               </div>
             </label>
+            <label class="field">
+              <span class="field-label">Sens</span>
+              <input id="b-sens" type="text" inputmode="decimal" placeholder="keep current" spellcheck="false" title="Applied as a scenario sens override in your current sens scale - goes live on scenario entry" />
+            </label>
+            <label class="field">
+              <span class="field-label">DPI</span>
+              <input id="b-dpi" type="text" inputmode="numeric" placeholder="keep current" spellcheck="false" title="Game DPI setting - applies when KovaaK's next starts (or quits)" />
+            </label>
           </div>
           <p class="builder-note muted">
             Palette, HUD layout, and pitch/volume settings are carried over from your current setup.
+            Sens uses your current sens scale; DPI applies on the game's next launch.
           </p>
           <div class="builder-actions">
             <button id="b-cancel">Cancel</button>
