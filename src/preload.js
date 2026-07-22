@@ -14,6 +14,12 @@ contextBridge.exposeInMainWorld('kova', {
   setHotkey: (id, hotkey) => ipcRenderer.invoke('presets:setHotkey', id, hotkey),
   apply: (preset) => ipcRenderer.invoke('preset:apply', preset),
   undoLast: () => ipcRenderer.invoke('undo:last'),
+  restartScenario: () => ipcRenderer.invoke('game:restart'),
+  launchGame: () => ipcRenderer.invoke('game:launch'),
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  setSettings: (patch) => ipcRenderer.invoke('settings:set', patch),
+  exportPresets: (id) => ipcRenderer.invoke('presets:export', id),
+  importPresets: () => ipcRenderer.invoke('presets:import'),
   hudSave: (uiRaw) => ipcRenderer.invoke('hud:save', uiRaw),
   // Fired when a queued change is flushed after the game quits.
   onChanged: (cb) => ipcRenderer.on('changed', () => cb()),

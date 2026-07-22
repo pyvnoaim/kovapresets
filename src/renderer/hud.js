@@ -465,8 +465,8 @@ $('#hud-save').addEventListener('click', async () => {
   hudClose()
   toast(
     status === 'queued'
-      ? "HUD layout saved — applies when you quit KovaaK's."
-      : "HUD layout saved — live next time you launch KovaaK's.",
+      ? "HUD layout saved - applies when you quit KovaaK's."
+      : "HUD layout saved - live next time you launch KovaaK's.",
     status === 'queued' ? 'warn' : 'ok'
   )
 })

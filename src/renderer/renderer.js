@@ -2,6 +2,7 @@
 // no fs - every privileged action round-trips to the main process.
 const $ = (sel) => document.querySelector(sel)
 let current = null // last state snapshot
+let dragReordering = false // true while a preset row is being dragged
 
 // ---- theme (system / light / dark), mirrors the website's class mechanism -----
 function applyTheme(mode) {
@@ -38,6 +39,8 @@ const ICON = {
   grip:
     '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>',
   key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="10" rx="2"/><path d="M6 11v2M10 11v2M14 11v2M18 11v2"/></svg>',
+  share:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m8 7 4-4 4 4"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>',
 }
 
 // KovaaK's stores crosshair color as "X=r Y=g Z=b" (0-1). Convert to/from #hex
@@ -72,6 +75,8 @@ function soundUrl(name) {
 // one shared player so previews never overlap
 const previewAudio = new Audio()
 function playSound(name) {
+  // a preview click is momentary - don't leave the button focus-ringed
+  if (document.activeElement instanceof HTMLButtonElement) document.activeElement.blur()
   const url = soundUrl(name)
   if (!url) return toast(`Sound file for "${esc(name)}" not found.`, 'err')
   previewAudio.pause()
@@ -103,10 +108,21 @@ function drawCrosshair(canvas, file, colorCC) {
   img.src = url
 }
 
-function toast(msg, kind = '', ms = 3600) {
+// action = { label, run }: renders a button inside the toast (e.g. "Re-enter now")
+function toast(msg, kind = '', ms = 3600, action = null) {
   const el = $('#toast')
   el.className = `toast ${kind}`
   el.innerHTML = msg
+  if (action) {
+    const btn = document.createElement('button')
+    btn.className = 'toast-action'
+    btn.textContent = action.label
+    btn.addEventListener('click', () => {
+      el.classList.add('hidden')
+      action.run()
+    })
+    el.appendChild(btn)
+  }
   el.classList.remove('hidden')
   clearTimeout(toast._t)
   toast._t = setTimeout(() => el.classList.add('hidden'), ms)
@@ -117,17 +133,34 @@ function toast(msg, kind = '', ms = 3600) {
 const themeName = (snap) =>
   snap?.primary?.stringSettings?.CurrentThemeName || snap?.primary?.CurrentThemeName || ''
 const crosshair = (snap) => snap?.weapon?.CrosshairFile || ''
+// display-only: "OPDot.png" reads better as "OPDot" (files keep the extension)
+const noExt = (f) => String(f || '').replace(/\.[a-z0-9]+$/i, '')
 const bodyHit = (snap) => snap?.weapon?.BodyHitSound || ''
 
 // Is preset P exactly what's active now? (every field the preset specifies matches;
 // CurrentThemeName is excluded - the live-switch proxy pins it to "KovaPreset")
+// Numbers compare with an epsilon: the game rewrites its settings file with its
+// own float formatting on relaunch (0.77 vs 0.7699999809265137), and that drift
+// must not read as "different preset".
+function sameVal(a, b) {
+  const num = (v) =>
+    typeof v === 'number'
+      ? v
+      : typeof v === 'string' && v.trim() !== '' && !Number.isNaN(Number(v))
+        ? Number(v)
+        : null
+  const na = num(a)
+  const nb = num(b)
+  if (na != null && nb != null) return Math.abs(na - nb) < 1e-4
+  return JSON.stringify(a) === JSON.stringify(b)
+}
 function isActive(preset, active) {
   for (const k of Object.keys(preset.weapon || {}))
-    if ((preset.weapon[k] ?? '') !== (active.weapon?.[k] ?? '')) return false
+    if (!sameVal(preset.weapon[k] ?? '', active.weapon?.[k] ?? '')) return false
   for (const section of Object.keys(preset.primary || {}))
     for (const [key, val] of Object.entries(preset.primary[section] || {})) {
       if (key === 'CurrentThemeName') continue
-      if (JSON.stringify(val) !== JSON.stringify(active.primary?.[section]?.[key])) return false
+      if (!sameVal(val, active.primary?.[section]?.[key])) return false
     }
   return true
 }
@@ -137,7 +170,7 @@ function isActive(preset, active) {
 function summaryHtml(preset) {
   const parts = []
   if (themeName(preset)) parts.push(`<span class="sm-val">${esc(themeName(preset))}</span>`)
-  if (crosshair(preset)) parts.push(`<span class="sm-val">${esc(crosshair(preset))}</span>`)
+  if (crosshair(preset)) parts.push(`<span class="sm-val">${esc(noExt(crosshair(preset)))}</span>`)
   if (bodyHit(preset))
     parts.push(
       `<span class="sm-val sm-sound">${esc(bodyHit(preset))}<button class="play play-hit" data-tip="Preview">${ICON.play}</button></span>`
@@ -158,7 +191,7 @@ function activeThemeLabel(active, presets) {
       for (const [key, val] of Object.entries(p.primary[section] || {})) {
         if (key === 'CurrentThemeName') continue
         if (!section.match(/Settings$/)) continue
-        if (JSON.stringify(val) !== JSON.stringify(active.primary?.[section]?.[key])) return false
+        if (!sameVal(val, active.primary?.[section]?.[key])) return false
       }
     return true
   })
@@ -169,24 +202,30 @@ function activeThemeLabel(active, presets) {
 function renderActive(active) {
   const w = active.weapon
   const s = active.primary?.stringSettings || {}
+  const f = active.primary?.floatSettings || {}
+  const round2 = (v) => Math.round(v * 100) / 100
+  const hitBits = []
+  if (f.HitPitch != null) hitBits.push(`pitch ${round2(f.HitPitch)}`)
+  if (f.HitVolume != null) hitBits.push(`volume ${round2(f.HitVolume)}`)
   $('#active').innerHTML = `
     <div class="stat">
       <div class="label">Theme</div>
-      <div class="value">${esc(activeThemeLabel(active, current?.presets)) || '—'}</div>
+      <div class="value">${esc(activeThemeLabel(active, current?.presets)) || '-'}</div>
     </div>
     <div class="stat">
       <div class="label">Crosshair</div>
-      <div class="value">${esc(w.CrosshairFile) || '—'}</div>
+      <div class="value">${esc(noExt(w.CrosshairFile)) || '-'}</div>
       <div class="sub">scale ${esc(w.CrosshairScale) || '1.0'}</div>
     </div>
     <div class="stat">
       <div class="label">Hit sound</div>
-      <div class="value">${esc(w.BodyHitSound) || '—'}</div>
+      <div class="value">${esc(w.BodyHitSound) || '-'}</div>
+      ${hitBits.length ? `<div class="sub">${hitBits.join(' · ')}</div>` : ''}
     </div>
     <div class="stat">
       <div class="label">Kill / spawn sound</div>
-      <div class="value">${esc(s.KillConfirmedSound) || '—'}</div>
-      <div class="sub">spawn ${esc(s.SpawnSound) || '—'}</div>
+      <div class="value">${esc(s.KillConfirmedSound) || '-'}</div>
+      <div class="sub">spawn ${esc(s.SpawnSound) || '-'}</div>
     </div>`
 }
 
@@ -215,11 +254,12 @@ function renderPresets(presets, active) {
         <div class="summary">${summaryHtml(preset)}</div>
       </div>
       <div class="actions">
-        <button class="hotkey${preset.hotkey ? ' has-key' : ''}" data-tip="${preset.hotkey ? `${esc(preset.hotkey)} — click to change, Backspace clears` : 'Set global hotkey'}">
+        <button class="dup quiet" data-tip="Duplicate" aria-label="Duplicate preset">${ICON.copy}</button>
+        <button class="exp quiet" data-tip="Export to a file (share it)" aria-label="Export preset">${ICON.share}</button>
+        <button class="del quiet" data-tip="Delete" aria-label="Delete preset">${ICON.trash}</button>
+        <button class="hotkey${preset.hotkey ? ' has-key' : ''}" data-tip="${preset.hotkey ? `${esc(preset.hotkey)} - click to change, Backspace clears` : 'Set global hotkey'}">
           ${preset.hotkey ? esc(preset.hotkey) : ICON.key}
         </button>
-        <button class="dup quiet" data-tip="Duplicate" aria-label="Duplicate preset">${ICON.copy}</button>
-        <button class="del quiet" data-tip="Delete" aria-label="Delete preset">${ICON.trash}</button>
         <button class="apply ${activeNow ? 'is-active' : 'primary'}" ${activeNow ? 'disabled' : ''}>
           ${activeNow ? ICON.check + 'Active' : 'Apply'}
         </button>
@@ -256,6 +296,11 @@ function renderPresets(presets, active) {
       current.presets = await window.kova.duplicate(preset.id)
       renderPresets(current.presets, current.active)
     })
+    row.querySelector('.exp').addEventListener('click', async () => {
+      const res = await window.kova.exportPresets(preset.id)
+      if (res.ok) toast('Preset exported - send the file to anyone with KovaPresets.', 'ok')
+      else if (!res.canceled) toast(esc(res.error || 'Export failed.'), 'err')
+    })
     const applyBtn = row.querySelector('.apply')
     if (!activeNow) applyBtn.addEventListener('click', () => applyPreset(preset))
     row.querySelector('.del').addEventListener('click', async () => {
@@ -263,31 +308,48 @@ function renderPresets(presets, active) {
       renderPresets(current.presets, current.active)
     })
 
-    // drag to reorder - pointer-based (HTML5 DnD flickers and misfires here)
+    // drag to reorder - pointer-based (HTML5 DnD flickers and misfires here).
+    // The slot is recomputed from row midpoints on every move (idempotent, so
+    // it can't oscillate), displaced rows FLIP-animate into place, and the
+    // refresh poll is paused so a background re-render can't duplicate the
+    // held row mid-drag.
     const grip = row.querySelector('.grip')
     grip.addEventListener('pointerdown', (e) => {
       e.preventDefault()
+      grip.setPointerCapture(e.pointerId)
+      dragReordering = true
       row.classList.add('dragging')
       const rows = () => [...wrap.querySelectorAll('.preset')]
       const move = (ev) => {
-        for (const other of rows()) {
-          if (other === row) continue
-          const r = other.getBoundingClientRect()
-          if (ev.clientY > r.top && ev.clientY < r.bottom) {
-            wrap.insertBefore(row, ev.clientY < r.top + r.height / 2 ? other : other.nextSibling)
-            break
-          }
+        const target = rows().find(
+          (el) => el !== row && ev.clientY < el.getBoundingClientRect().top + el.offsetHeight / 2
+        )
+        if (target === row.nextElementSibling || (!target && row === wrap.lastElementChild)) return
+        const before = new Map(rows().map((el) => [el, el.getBoundingClientRect().top]))
+        if (target) wrap.insertBefore(row, target)
+        else wrap.appendChild(row)
+        for (const [el, top] of before) {
+          if (el === row) continue
+          const d = top - el.getBoundingClientRect().top
+          if (d)
+            el.animate([{ transform: `translateY(${d}px)` }, { transform: 'none' }], {
+              duration: 130,
+              easing: 'ease-out',
+            })
         }
       }
-      const up = async () => {
+      const finish = async () => {
         window.removeEventListener('pointermove', move)
-        window.removeEventListener('pointerup', up)
+        window.removeEventListener('pointerup', finish)
+        window.removeEventListener('pointercancel', finish)
         row.classList.remove('dragging')
+        dragReordering = false
         current.presets = await window.kova.reorder(rows().map((el) => el.dataset.id))
         renderPresets(current.presets, current.active)
       }
       window.addEventListener('pointermove', move)
-      window.addEventListener('pointerup', up)
+      window.addEventListener('pointerup', finish)
+      window.addEventListener('pointercancel', finish)
     })
     wrap.appendChild(row)
   }
@@ -319,7 +381,7 @@ function recordHotkey(preset, chip) {
     current.presets = await window.kova.setHotkey(preset.id, accel)
     cleanup()
     renderPresets(current.presets, current.active)
-    toast(`Hotkey <b>${esc(accel)}</b> set — works anywhere, even in-game.`, 'ok')
+    toast(`Hotkey <b>${esc(accel)}</b> set - works anywhere, even in-game.`, 'ok')
   }
   const cleanup = () => {
     window.removeEventListener('keydown', onKey, true)
@@ -336,27 +398,41 @@ function normalizeKey(e) {
   return null
 }
 
+async function reenterScenario() {
+  const res = await window.kova.restartScenario()
+  if (res.ok)
+    toast(
+      `Re-entering <b>${esc(res.scenario)}</b>${res.hopped ? ' (brief detour so the game reloads it)' : ''} - new crosshair & sounds load with it. The run starts right away, hit your reset bind when ready.`,
+      'ok',
+      6500
+    )
+  else toast(esc(res.error || "Couldn't re-enter the scenario."), 'err')
+}
+
 async function applyPreset(preset) {
   try {
-    const { weaponChanged, theme } = await window.kova.apply(preset)
+    const { weaponChanged, theme, running } = await window.kova.apply(preset)
     await refresh()
-    const live = weaponChanged ? 'Crosshair & sounds are live — re-enter your scenario.' : ''
+    // while the game runs, offer the one-tap re-enter right on the toast
+    const reenter = weaponChanged && running ? { label: 'Re-enter now', run: reenterScenario } : null
+    const live = weaponChanged ? 'Crosshair & sounds are live - re-enter your scenario.' : ''
     if (theme === 'live') {
-      toast(`${live} <b>Theme: open the menu in KovaaK's and it applies instantly.</b>`.trim(), 'ok', 6500)
+      toast(`${live} <b>Theme: open KovaaK's settings once and it applies.</b>`.trim(), 'ok', 6500, reenter)
     } else if (theme === 'arming') {
       toast(
-        `${live} Theme is staged — <b>select the "!KovaPreset" theme (top of KovaaK's theme list) once</b>; after that, theme changes apply live on menu-open.`.trim(),
+        `${live} Theme is staged - <b>select the "!KovaPreset" theme (top of KovaaK's theme list) once</b>; after that, theme changes apply when you open settings.`.trim(),
         'warn',
-        8000
+        8000,
+        reenter
       )
     } else if (theme === 'queued') {
-      toast(`${live} Layout/palette changes apply when you quit KovaaK's.`.trim(), 'warn', 6000)
+      toast(`${live} Layout/palette changes apply when you quit KovaaK's.`.trim(), 'warn', 6000, reenter)
     } else if (theme === 'applied') {
-      toast(`Applied. ${live || "Theme is set for your next KovaaK's launch."}`.trim(), 'ok')
+      toast(`Applied. ${live || "Theme is set for your next KovaaK's launch."}`.trim(), 'ok', 3600, reenter)
     } else if (weaponChanged) {
-      toast(live, 'ok')
+      toast(live, 'ok', 5000, reenter)
     } else {
-      toast('Already active — nothing to change.', 'ok')
+      toast('Already active - nothing to change.', 'ok')
     }
   } catch (err) {
     toast(esc(String(err.message || err)), 'err')
@@ -368,6 +444,7 @@ async function refresh() {
   // (this is what made the dropdowns unscrollable) and can eat typed input.
   if (!$('#builder').classList.contains('hidden')) return
   if (document.querySelector('#hud-view:not(.hidden)')) return
+  if (dragReordering) return
   current = await window.kova.state()
   const pill = $('#game-pill')
   if (!current.install) {
@@ -381,7 +458,13 @@ async function refresh() {
   $('#content').classList.remove('hidden')
   pill.textContent = current.gameRunning ? "KovaaK's: running" : "KovaaK's: closed"
   pill.className = 'pill ' + (current.gameRunning ? 'pill-on' : 'pill-off')
+  $('#launch').classList.toggle('hidden', current.gameRunning)
   $('#undo').classList.toggle('hidden', !current.canUndo)
+  // capturing a setup that's already saved would only create a duplicate
+  const alreadySaved = (current.presets || []).some((p) => isActive(p, current.active))
+  const cap = $('#capture')
+  cap.disabled = alreadySaved
+  cap.dataset.tip = alreadySaved ? 'Already saved as a preset' : 'Save this setup as a preset'
   renderActive(current.active)
   renderPresets(current.presets, current.active)
 }
@@ -479,7 +562,7 @@ function populateBuilder() {
   if (!current?.options) return
   // placeholders show what "leave empty" keeps
   $('#b-theme').placeholder = `keep current (${themeName(current.active) || 'none'})`
-  $('#b-crosshair').placeholder = `keep current (${crosshair(current.active) || 'none'})`
+  $('#b-crosshair').placeholder = `keep current (${noExt(crosshair(current.active)) || 'none'})`
   $('#b-sound').placeholder = `keep current (${bodyHit(current.active) || 'none'})`
   const hex = colorToHex(current.active?.weapon?.CrosshairColor)
   $('#b-color').value = hex
@@ -528,6 +611,38 @@ $('#b-create').addEventListener('click', async () => {
   toast('Preset created.', 'ok')
 })
 $('#refresh').addEventListener('click', refresh)
+$('#launch').addEventListener('click', async () => {
+  await window.kova.launchGame()
+  toast("Launching KovaaK's via Steam…", 'ok')
+})
+$('#import').addEventListener('click', async () => {
+  const res = await window.kova.importPresets()
+  if (res.ok) {
+    current.presets = res.presets
+    renderPresets(current.presets, current.active)
+    toast(`Imported ${res.count} preset${res.count === 1 ? '' : 's'}.`, 'ok')
+  } else if (!res.canceled) {
+    toast(esc(res.error || 'Import failed.'), 'err')
+  }
+})
+
+// ---- settings (auto re-enter) ---------------------------------------------------
+async function loadSettingsUi() {
+  const s = await window.kova.getSettings()
+  $('#auto-restart').checked = !!s.autoRestart
+  $('#restart-key-note').textContent =
+    'Re-entering relaunches your last-played scenario through Steam, the same way play links on the web do.'
+}
+$('#auto-restart').addEventListener('change', async (e) => {
+  await window.kova.setSettings({ autoRestart: e.target.checked })
+  toast(
+    e.target.checked
+      ? 'Hotkey applies will now restart your scenario automatically.'
+      : 'Auto re-enter turned off.',
+    'ok'
+  )
+})
+loadSettingsUi()
 $('#undo').addEventListener('click', async () => {
   const res = await window.kova.undoLast()
   await refresh()
@@ -544,13 +659,14 @@ $('#b-killsound-play').addEventListener('click', () =>
   playSound($('#b-killsound').value.trim() || current?.active?.primary?.stringSettings?.KillConfirmedSound)
 )
 window.kova.onChanged(() => refresh()) // queued changes landed after the game quit
-window.kova.onHotkeyApplied(({ name, theme, weaponChanged }) => {
+window.kova.onHotkeyApplied(({ name, theme, weaponChanged, restarted }) => {
   refresh()
   const bits = []
-  if (weaponChanged) bits.push('crosshair/sounds live on scenario re-entry')
-  if (theme === 'live') bits.push('theme applies on menu-open')
+  if (restarted) bits.push('scenario restarted, changes are live')
+  else if (weaponChanged) bits.push('crosshair/sounds live on scenario re-entry')
+  if (theme === 'live') bits.push('theme applies when you open settings')
   else if (theme === 'arming') bits.push('select !KovaPreset in the theme menu once')
-  toast(`Hotkey applied <b>${esc(name)}</b>${bits.length ? ' — ' + bits.join(', ') : ''}.`, 'ok', 5000)
+  toast(`Hotkey applied <b>${esc(name)}</b>${bits.length ? ' - ' + bits.join(', ') : ''}.`, 'ok', 5000)
 })
 
 refresh()
