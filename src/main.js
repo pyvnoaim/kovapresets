@@ -75,7 +75,9 @@ function createWindow() {
     minHeight: 520,
     backgroundColor: '#111114',
     title: 'KovaPresets',
-    icon: path.join(__dirname, 'assets', 'tray.ico'),
+    icon: path.join(__dirname, 'assets', 'app.ico'),
+    // started as a login item: boot straight into the tray, no window flash
+    show: !process.argv.includes('--hidden'),
     // Riot-client-style chrome: fully frameless, the app's own topbar is the
     // drag region and renders its own caption buttons (the Windows overlay
     // buttons drew oversized/missing hover states at this bar height).
@@ -124,7 +126,7 @@ const userData = () => app.getPath('userData')
 const pendingFile = () => path.join(userData(), 'pending.json')
 
 // ---- app settings (small flags, not presets) -----------------------------------
-const SETTINGS_DEFAULTS = { autoRestart: false, trayTipShown: false }
+const SETTINGS_DEFAULTS = { autoRestart: false, trayTipShown: false, launchOnStartup: false }
 const settingsFile = () => path.join(userData(), 'settings.json')
 function loadSettings() {
   try {
@@ -648,6 +650,13 @@ ipcMain.handle('settings:get', () => loadSettings())
 ipcMain.handle('settings:set', (_e, patch) => {
   const s = { ...loadSettings(), ...patch }
   saveSettings(s)
+  // registering the dev electron.exe as a login item would be nonsense - the
+  // setting still saves, and takes effect from an installed build
+  if ('launchOnStartup' in patch && app.isPackaged)
+    app.setLoginItemSettings({
+      openAtLogin: !!s.launchOnStartup,
+      args: ['--hidden'], // boot into the tray, not a window on the desktop
+    })
   return s
 })
 
