@@ -1,14 +1,33 @@
 {
   "name": "kovapreset",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Switch KovaaK's theme / crosshair / sound presets, live while the game is open.",
+  "author": "pyvnoaim",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "core:test": "node src/core/selftest.js"
+    "core:test": "node src/core/selftest.js",
+    "dist": "electron-builder"
   },
   "devDependencies": {
-    "electron": "^43.1.1"
+    "electron": "^43.1.1",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "app.kova.presets",
+    "productName": "KovaPresets",
+    "files": ["src/**/*"],
+    "win": {
+      "target": ["nsis"],
+      "icon": "src/assets/app.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "shortcutName": "KovaPresets",
+      "uninstallDisplayName": "KovaPresets",
+      "deleteAppDataOnUninstall": false
+    }
   }
 }

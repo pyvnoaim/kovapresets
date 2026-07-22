@@ -1003,6 +1003,7 @@ $('#import').addEventListener('click', async () => {
 async function loadSettingsUi() {
   const s = await window.kova.getSettings()
   $('#auto-restart').checked = !!s.autoRestart
+  $('#launch-startup').checked = !!s.launchOnStartup
   $('#restart-key-note').textContent =
     'Re-entering relaunches your last-played scenario through Steam, the same way play links on the web do.'
 }
@@ -1012,6 +1013,15 @@ $('#auto-restart').addEventListener('change', async (e) => {
     e.target.checked
       ? 'Hotkey applies will now restart your scenario automatically.'
       : 'Auto re-enter turned off.',
+    'ok'
+  )
+})
+$('#launch-startup').addEventListener('change', async (e) => {
+  await window.kova.setSettings({ launchOnStartup: e.target.checked })
+  toast(
+    e.target.checked
+      ? 'KovaPresets will start with Windows, tucked into the tray.'
+      : 'Startup launch turned off.',
     'ok'
   )
 })
