@@ -31,7 +31,8 @@
       {
         "provider": "github",
         "owner": "pyvnoaim",
-        "repo": "kovapresets"
+        "repo": "kovapresets",
+        "releaseType": "release"
       }
     ],
     "win": {
