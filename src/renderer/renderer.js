@@ -208,12 +208,13 @@ function playSound(name) {
 }
 
 // Draw a crosshair PNG tinted the way the game tints it: multiply the pixels
-// with the color, keeping the original alpha.
+// with the color, keeping the original alpha. Decoded images are cached so
+// re-renders don't hit the disk again for the same PNG.
+const xhairImgCache = new Map() // url -> Image
 function drawCrosshair(canvas, file, colorCC) {
   const url = crosshairUrl(file)
   if (!url) return
-  const img = new Image()
-  img.onload = () => {
+  const paint = (img) => {
     const ctx = canvas.getContext('2d')
     const s = Math.min(canvas.width / img.width, canvas.height / img.height, 1)
     const w = img.width * s
@@ -227,7 +228,14 @@ function drawCrosshair(canvas, file, colorCC) {
     ctx.drawImage(img, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h)
     ctx.globalCompositeOperation = 'source-over'
   }
-  img.src = url
+  let img = xhairImgCache.get(url)
+  if (img && img.complete && img.naturalWidth) return paint(img)
+  if (!img) {
+    img = new Image()
+    xhairImgCache.set(url, img)
+    img.src = url
+  }
+  img.addEventListener('load', () => paint(img), { once: true })
 }
 
 // action = { label, run }: renders a button inside the toast (e.g. "Re-enter now")
@@ -598,20 +606,22 @@ async function applyPreset(preset) {
   }
 }
 
-async function refresh() {
+let lastRenderSig = ''
+async function refresh(rescan) {
   // Don't re-render under an open builder/editor - it closes native popups
   // (this is what made the dropdowns unscrollable) and can eat typed input.
   if (!$('#builder').classList.contains('hidden')) return
   if (document.querySelector('#hud-view:not(.hidden)')) return
   if (dragReordering) return
   if (cpick.isOpen()) return // a re-render would tear out the popover's anchor
-  current = await window.kova.state()
+  current = await window.kova.state(rescan ? { rescan: true } : undefined)
   const pill = $('#game-pill')
   if (!current.install) {
     $('#not-found').classList.remove('hidden')
     $('#content').classList.add('hidden')
     pill.textContent = "KovaaK's: not found"
     pill.className = 'pill pill-off'
+    lastRenderSig = ''
     return
   }
   $('#not-found').classList.add('hidden')
@@ -620,6 +630,12 @@ async function refresh() {
   pill.className = 'pill ' + (current.gameRunning ? 'pill-on' : 'pill-off')
   $('#launch').classList.toggle('hidden', current.gameRunning)
   $('#deactivate').classList.toggle('hidden', !current.canRestore)
+  // Skip the expensive re-render (all rows rebuilt, crosshair canvases redrawn)
+  // when nothing it draws from actually changed - most 5s ticks. Also keeps a
+  // mid-rename name input from losing focus to the poll.
+  const sig = JSON.stringify([current.active, current.presets, current.pending, current.install])
+  if (!rescan && sig === lastRenderSig) return
+  lastRenderSig = sig
   // capturing a setup that's already saved would only create a duplicate
   const alreadySaved = (current.presets || []).some((p) => isActive(p, current.active))
   const cap = $('#capture')
@@ -793,7 +809,7 @@ $('#b-create').addEventListener('click', async () => {
   builder.classList.add('hidden')
   toast('Preset created.', 'ok')
 })
-$('#refresh').addEventListener('click', refresh)
+$('#refresh').addEventListener('click', () => refresh(true)) // manual = full re-scan
 $('#win-min').addEventListener('click', () => window.kova.winMinimize())
 $('#win-close').addEventListener('click', () => window.kova.winClose())
 $('#launch').addEventListener('click', async () => {

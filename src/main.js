@@ -12,6 +12,7 @@ const {
 } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
+const { execFile } = require('node:child_process')
 const k = require('./core/kovaaks')
 const store = require('./core/presets')
 
@@ -20,6 +21,42 @@ const STEAM_APP_ID = '824270' // KovaaK's
 let win = null
 let tray = null
 let quitting = false
+
+// ---- hot-path caches ------------------------------------------------------------
+// The renderer polls `state` every 5s; without these that meant a synchronous
+// tasklist spawn (blocks the main process), a Steam-library re-scan, and a
+// re-read of ~55 theme JSONs per tick.
+let installCache = null // a found install doesn't move while the app runs
+function findInstall(rescan) {
+  if (rescan) installCache = null
+  if (!installCache) installCache = k.findInstall()
+  return installCache
+}
+
+// game-running is polled ASYNC on a timer; readers get the cached answer
+// synchronously, so apply/flush logic stays sync and nothing blocks on spawns.
+// Worst case the answer is ~3s stale, which every consumer tolerates (a late
+// flush waits one 4s tick; an apply mid-transition queues and gets flushed).
+let gameRunningCache = k.isGameRunning()
+const gameRunning = () => gameRunningCache
+function pollGameRunning() {
+  execFile(
+    'tasklist',
+    ['/FI', 'IMAGENAME eq FPSAimTrainer.exe', '/NH'],
+    { windowsHide: true },
+    (err, out) => {
+      gameRunningCache = !err && /FPSAimTrainer\.exe/i.test(String(out))
+    }
+  )
+}
+
+let optionsCache = null // { install, at, value }
+const OPTIONS_TTL_MS = 30_000
+function listOptionsCached(install, rescan) {
+  if (rescan || !optionsCache || optionsCache.install !== install || Date.now() - optionsCache.at > OPTIONS_TTL_MS)
+    optionsCache = { install, at: Date.now(), value: k.listOptions(install) }
+  return optionsCache.value
+}
 
 function createWindow() {
   win = new BrowserWindow({
@@ -69,7 +106,7 @@ function showWindow() {
 }
 
 function requireInstall() {
-  const install = k.findInstall()
+  const install = findInstall()
   if (!install) throw new Error("KovaaK's install not found. Is it installed via Steam?")
   return install
 }
@@ -106,8 +143,8 @@ const scenarioLink = (name, challenge) =>
   `steam://run/${STEAM_APP_ID}/?action=jump-to-scenario;name=${encodeURIComponent(name)}${challenge ? ';mode=challenge' : ''}`
 
 async function doRestartScenario() {
-  if (!k.isGameRunning()) return { ok: false, error: "KovaaK's isn't running." }
-  const install = k.findInstall()
+  if (!gameRunning()) return { ok: false, error: "KovaaK's isn't running." }
+  const install = findInstall()
   const [scenario, parking] = install ? k.recentScenariosFromStats(install) : []
   if (!scenario)
     return { ok: false, error: 'No finished run found yet - re-enter the scenario by hand.' }
@@ -146,8 +183,8 @@ function clearPending() {
 function flushPendingIfPossible() {
   const pending = readPending()
   if (!pending) return false
-  if (k.isGameRunning()) return false
-  const install = k.findInstall()
+  if (gameRunning()) return false
+  const install = findInstall()
   if (!install) return false
   if (pending.primaryRaw != null)
     // undo restore: put the exact captured file back
@@ -194,7 +231,7 @@ function deactivatePresets() {
   if (!hasBaseline()) return { ok: false, error: 'Nothing to restore.' }
   const dir = baselineDir()
   const install = requireInstall()
-  const running = k.isGameRunning()
+  const running = gameRunning()
   const read = (n) => {
     const f = path.join(dir, n)
     return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null
@@ -243,7 +280,7 @@ function deactivatePresets() {
 // ---- preset apply (shared by IPC and hotkeys) ---------------------------------
 function doApplyPreset(preset) {
   const install = requireInstall()
-  const running = k.isGameRunning()
+  const running = gameRunning()
   captureBaselineIfMissing(install)
   const weaponChanged = k.applyWeapon(install, preset.weapon)
   // The game rewrites weaponsettings.ini from memory on exit, so an apply it
@@ -377,8 +414,8 @@ function createTray() {
 }
 
 // ---- IPC ----------------------------------------------------------------------
-ipcMain.handle('state', () => {
-  const install = k.findInstall()
+ipcMain.handle('state', (_e, opts) => {
+  const install = findInstall(opts?.rescan)
   if (!install) return { install: null }
   const active = k.readActive(install)
   // Applies made while the game runs sit in pending.json until the game quits,
@@ -396,9 +433,9 @@ ipcMain.handle('state', () => {
   }
   return {
     install,
-    gameRunning: k.isGameRunning(),
+    gameRunning: gameRunning(),
     active,
-    options: k.listOptions(install),
+    options: listOptionsCached(install, opts?.rescan),
     presets: loadPresetsMigrated(install),
     pending: !!pending,
     resolution: k.readResolution(),
@@ -591,7 +628,7 @@ ipcMain.handle('presets:import', async () => {
 
 ipcMain.handle('hud:save', (_e, uiRaw) => {
   const install = requireInstall()
-  if (k.isGameRunning()) {
+  if (gameRunning()) {
     const pending = readPending() || {}
     setPending({ ...pending, ui: uiRaw })
     return { status: 'queued' }
@@ -606,6 +643,9 @@ app.whenReady().then(() => {
   flushPendingIfPossible()
   registerHotkeys()
   setInterval(flushPendingIfPossible, 4000)
+  setInterval(pollGameRunning, 3000)
+  // legacy storage from the removed per-apply undo system
+  fs.rmSync(path.join(userData(), 'backups'), { recursive: true, force: true })
   app.on('activate', showWindow)
 })
 
