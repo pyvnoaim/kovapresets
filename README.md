@@ -14,7 +14,7 @@ Windows only (KovaaK's is a Windows game). Free and open source.
 Paste this into PowerShell:
 
 ```powershell
-irm https://pyvno.xyz/install.ps1 | iex
+irm https://raw.githubusercontent.com/pyvnoaim/kovapresets/main/install.ps1 | iex
 ```
 
 That grabs the newest release and runs it. No admin rights needed, KovaPresets

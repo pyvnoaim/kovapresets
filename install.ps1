@@ -1,6 +1,6 @@
 # KovaPresets installer.
 #
-#   irm https://pyvno.xyz/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/pyvnoaim/kovapresets/main/install.ps1 | iex
 #
 # Downloads the newest release from GitHub and runs it. No admin rights needed -
 # KovaPresets installs for the current user only.
