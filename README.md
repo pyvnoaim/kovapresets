@@ -1,68 +1,106 @@
-# KovaPresets (desktop)
+# KovaPresets
 
-Switch KovaaK's **theme / crosshair / sound** presets from one window, live while
-the game is open. Electron app, separate from the Kova web project (like `bot/`).
+Save your KovaaK's **crosshair, theme, sounds, sens and HUD layout** as presets and
+switch between them with one click, or a global hotkey, without alt-tabbing out of
+a run.
 
-## Run
+Windows only (KovaaK's is a Windows game). Free and open source.
 
-```bash
-cd desktop
-npm install
-npm start          # launch the app
-npm run core:test  # read-only smoke test of the KovaaK's file logic (no GUI)
-```
+> Unofficial community tool. Not affiliated with or endorsed by KovaaK's /
+> FPSAimTrainer.
+
+## Install
+
+Grab the latest **KovaPresets Setup exe** from the
+[releases page](https://github.com/pyvnoaim/kovapresets/releases/latest) and run it.
+
+It installs for your user only, so there's no admin prompt, and it finds your
+KovaaK's install automatically through Steam.
+
+Windows SmartScreen will likely warn you the first time, because the installer
+isn't code-signed yet. Click **More info → Run anyway**. The app updates itself
+from this repo's releases from then on.
+
+## What it does
+
+A preset is a snapshot of how your game looks and sounds. Applying one rewrites
+only the matching keys in KovaaK's own settings files, leaving everything else
+untouched.
+
+| What a preset holds | Applies |
+|---|---|
+| Crosshair (file, color, scale) | On your next scenario load |
+| Hit / kill sounds | On your next scenario load |
+| Scenario sens override + DPI | Sens on scenario load, DPI on next launch |
+| Theme (walls, floor, sky, enemy colors) | Live, once you open the game's settings screen |
+| HUD window layout, palette | When the game next starts or quits |
+
+Beyond switching presets:
+
+- **Global hotkeys** — bind a preset to a key combo that works while you're in game.
+- **Live theme swapping** — select the bundled `!KovaPreset` theme in game once, and
+  theme changes apply without restarting.
+- **One-tap scenario re-enter** — reloads your current scenario through Steam so a
+  change goes live immediately, optionally automatic after a hotkey apply.
+- **HUD editor** — drag your in-game HUD windows on a virtual screen with snapping,
+  alignment, even spacing and undo, instead of nudging them in game.
+- **Import / export** — share a preset as a `.kovapreset.json` file.
+- **Restore original setup** — puts every setting back to how it was before
+  KovaPresets ever touched it.
+- **Tray resident** — closing the window keeps hotkeys alive in the tray, and it can
+  start with Windows.
 
 ## How it works
 
-KovaaK's stores the active look/feel as plain text under
-`<SteamLibrary>\steamapps\common\FPSAimTrainer\FPSAimTrainer\Saved\SaveGames\`:
+KovaaK's keeps its settings as plain text under
+`<SteamLibrary>\steamapps\common\FPSAimTrainer\FPSAimTrainer\Saved\SaveGames\`.
+KovaPresets reads and writes those same files, nothing more:
 
-| What | File | Keys |
-|---|---|---|
-| Crosshair + combat sounds | `weaponsettings.ini` | `CrosshairFile`, `CrosshairColor`, `CrosshairScale`, `BodyHitSound`, `HeadHitSound`, `ShootSound` |
-| Theme + event sounds | `PrimaryUserSettings.json` | `CurrentThemeName`, `KillConfirmedSound`, `SpawnSound`, `MBS*Sound` |
+| What | File |
+|---|---|
+| Crosshair, combat sounds, per-scenario sens | `weaponsettings.ini` |
+| Theme, event sounds, global sens, DPI | `PrimaryUserSettings.json` |
+| Theme definitions | `Themes\<name>.json` |
+| HUD window layout | `UI.json` |
 
-A **preset** is just a saved snapshot of those values. Applying one rewrites only
-those keys (BOM + CRLF + everything else preserved). KovaaK's **re-reads
-`weaponsettings.ini` on scenario entry**, so crosshair/sound swaps go live if you
-re-enter the scenario. The game rewrites these files on exit and when you change a
-setting in-game, so while a preset is applied, don't edit those settings inside
-KovaaK's or it'll clobber the file.
+Two of those reload at different times, which is why the table above lists
+different "applies" moments. `weaponsettings.ini` is re-read whenever a scenario
+loads. `PrimaryUserSettings.json` is only read when the game launches, but the
+**selected theme's** definition file is re-read every time you open the in game
+settings screen. KovaPresets uses that: it owns one proxy theme file called
+`!KovaPreset`, and applying a preset rewrites it, so themes can swap live.
 
-Install auto-detection reads the Steam path from the registry and parses
-`libraryfolders.vdf`, so a game on any drive is found.
+Anything that can't go live yet is queued and written the moment the game quits,
+so nothing is lost if you apply mid-session.
 
-## Beyond presets
+### On fair play
 
-- **One-tap scenario re-enter**: after an apply while the game runs, the toast
-  offers "Re-enter now" - it relaunches your last-played scenario (name read
-  from the newest file in the game's `stats/` folder) via the official
-  `steam://…jump-to-scenario` deep link, the same one play links on the web
-  use. Only a full scenario load makes KovaaK's re-read `weaponsettings.ini` -
-  the in-game Reset Session bind just resets the timer, so key-pressing is
-  useless (and synthetic input sits badly with KovaaK's external-tool policy;
-  the app sends none). The checkbox under the preset list turns on **auto
-  re-enter after hotkey applies**.
-- **Tray**: closing the window hides to the tray so global hotkeys keep working.
-  Right-click the tray icon to apply any preset or quit; left-click reopens.
-- **Import/export**: the share button on a preset row exports it to a
-  `.kovapreset.json` file (hotkey stripped); "Import" above the list merges a
-  shared file in.
-- **Launch**: a topbar button starts KovaaK's via `steam://rungameid/824270`
-  when it's closed.
+This tool only writes KovaaK's own cosmetic settings files. It sends **no
+synthetic input**, does no memory access, no time scaling, and nothing that
+affects scores or visibility of targets, in line with what the KovaaK's
+developers allow for external tools. Scenario re-entry uses the official
+`steam://` deep link, the same one that play links on the web use.
 
-## Layout
+## Development
 
-- `src/core/kovaaks.js` - pure-Node file logic (detect / read / diff / apply). Unit-testable.
-- `src/core/presets.js` - local JSON preset store (`userData/presets.json`).
-- `src/main.js` - Electron main; owns all fs/game access, exposes IPC.
-- `src/preload.js` - `contextBridge` IPC surface.
-- `src/renderer/*` - the UI (no build step; plain HTML/CSS/JS).
+```bash
+npm install
+npm start          # run the app
+npm run core:test  # read-only smoke test of the file logic, no GUI
+npm run dist       # build the Windows installer into dist/
+```
 
-## Roadmap
+- `src/core/kovaaks.js` — pure Node file logic (detect / read / diff / apply), no Electron.
+- `src/core/presets.js` — the local preset store.
+- `src/main.js` — Electron main; owns all filesystem and game access.
+- `src/preload.js` — the entire renderer to main IPC surface.
+- `src/renderer/*` — the UI, plain HTML/CSS/JS with no build step.
 
-- v1 (now): capture current setup → save presets → click to apply → live re-read,
-  plus tray quick-apply, preset import/export, and one-tap / auto scenario re-enter.
-- v2: sync presets from your Kova account (pull uploaded crosshair/sound/theme
-  assets, bundle referenced files into the game folders on apply).
-- later: package as an installer (electron-builder) with auto-update.
+Releasing: bump `version` in `package.json`, then `npm run release` with a
+`GH_TOKEN` in your environment. That builds the installer, publishes it to GitHub
+Releases along with the `latest.yml` manifest, and every installed copy picks the
+update up within a few hours.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
