@@ -39,7 +39,7 @@
     ],
     "win": {
       "target": [
-        "nsis"
+        { "target": "nsis", "arch": ["x64"] }
       ],
       "icon": "src/assets/app.ico"
     },
