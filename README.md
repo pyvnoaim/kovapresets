@@ -101,10 +101,18 @@ npm run dist       # build the Windows installer into dist/
 - `src/preload.js` — the entire renderer to main IPC surface.
 - `src/renderer/*` — the UI, plain HTML/CSS/JS with no build step.
 
-Releasing: bump `version` in `package.json`, then `npm run release` with a
-`GH_TOKEN` in your environment. That builds the installer, publishes it to GitHub
-Releases along with the `latest.yml` manifest, and every installed copy picks the
-update up within a few hours.
+Releasing:
+
+```bash
+npm version patch          # or minor / major - bumps package.json and tags
+git push --follow-tags
+GH_TOKEN=<token> npm run release
+```
+
+That builds the installer and publishes it to GitHub Releases along with the
+`latest.yml` manifest, and every installed copy picks the update up within a few
+hours. Push the tag first: publishing a non-draft release for a tag GitHub
+doesn't have yet fails with "Published releases must have a valid tag".
 
 ## License
 
