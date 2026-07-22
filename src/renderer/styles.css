@@ -205,6 +205,7 @@ body {
 .seg,
 #game-pill,
 #launch,
+#help,
 #refresh {
   height: 32px;
 }
@@ -331,8 +332,9 @@ button.ghost {
   background: transparent;
   padding: 6px 10px;
 }
-/* refresh: square icon button matching the navbar height */
-#refresh {
+/* help + refresh: square icon buttons matching the navbar height */
+#refresh,
+#help {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -395,6 +397,17 @@ button.danger:hover {
 .section-actions button {
   height: 32px;
   padding: 0 10px;
+}
+.section-actions .icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  padding: 0;
+}
+.section-actions .icon-btn svg {
+  width: 14px;
+  height: 14px;
 }
 .section-actions button:not(.primary) {
   background: transparent;
@@ -642,11 +655,8 @@ button.play:hover {
   color: var(--accent);
   border-color: var(--border);
 }
-button.play svg {
-  width: 11px;
-  height: 11px;
-}
-/* hotkey chip */
+/* hotkey chip - unset it reads as one of the quiet icon buttons; with a key it
+   becomes a labeled chip */
 .preset .hotkey {
   display: inline-flex;
   align-items: center;
@@ -657,12 +667,13 @@ button.play svg {
   padding: 0 8px;
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
-  color: var(--fg-muted);
+  color: var(--fg-subtle);
   background: transparent;
+  border-color: transparent;
 }
 .preset .hotkey svg {
-  width: 13px;
-  height: 13px;
+  width: 14px;
+  height: 14px;
 }
 .preset .hotkey.has-key {
   color: var(--fg);
@@ -710,7 +721,9 @@ button.play svg {
   height: 14px;
 }
 .preset .dup:hover,
-.preset .exp:hover {
+.preset .exp:hover,
+.preset .edit:hover,
+.preset .hotkey:not(.has-key):hover {
   color: var(--fg);
   border-color: var(--border);
 }
@@ -744,18 +757,6 @@ button.play svg {
   background: var(--surface-raised);
   border-color: var(--border-strong);
 }
-.name-field svg {
-  width: 13px;
-  height: 13px;
-  color: var(--fg-subtle);
-  flex-shrink: 0;
-  opacity: 0;
-  transition: opacity 0.12s;
-}
-.name-field:hover svg,
-.name-field:focus-within svg {
-  opacity: 1;
-}
 .preset .name {
   font-weight: 600;
   font-family: inherit;
@@ -771,10 +772,31 @@ button.play svg {
 .preset .summary {
   display: flex;
   align-items: baseline;
-  flex-wrap: wrap;
-  gap: 4px 8px;
+  /* one line always - sound names ellipsize down to a readable floor, and
+     only past that does the tail clip (full text is in the row tooltip) */
+  flex-wrap: nowrap;
+  overflow: hidden;
+  gap: 8px;
   margin-top: 5px;
   min-width: 0;
+}
+.preset .summary .sm-val {
+  flex-shrink: 0;
+}
+/* sound names give way first: they shrink with an ellipsis, but never below
+   ~10 chars - the "hit mil…" three-letter stumps read as broken */
+.preset .summary .sm-sound {
+  display: flex;
+  align-items: baseline;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.sm-sound .sm-name {
+  flex: 0 1 auto;
+  min-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .preset .summary .sm-val {
   font-size: 12px;
@@ -785,6 +807,12 @@ button.play svg {
 .preset .summary .sm-sep {
   font-size: 12px;
   color: var(--fg-subtle);
+}
+/* tiny muted label inside a summary chip: "sens 62", "hit milktea…" */
+.preset .summary .sm-k {
+  color: var(--fg-subtle);
+  font-size: 11px;
+  margin-right: 3px;
 }
 .preset .summary .sm-empty {
   font-size: 12px;
@@ -1006,6 +1034,22 @@ button.play svg {
   padding: 0 10px;
   font-size: 12px;
 }
+/* align bar: one labeled row per group, evenly spaced */
+#hud-align {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+.align-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+/* fixed label column so the button groups start on one vertical line */
+.align-row .field-label {
+  min-width: 130px;
+}
 .hud-scale {
   display: inline-flex;
   align-items: center;
@@ -1169,6 +1213,91 @@ button.play svg {
 [data-tip]:hover::after {
   opacity: 1;
   transition-delay: 0.35s;
+}
+/* the topbar sits at the window's top edge - flip its tips below the control */
+.topbar [data-tip]::after {
+  bottom: auto;
+  top: calc(100% + 7px);
+}
+/* caption buttons hug the right edge - pin their tips to it instead of centering */
+.win-controls [data-tip]::after {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+/* long tips opt into wrapping instead of one endless line */
+.tip-wrap[data-tip]::after {
+  white-space: normal;
+  width: max-content;
+  max-width: 280px;
+  text-align: center;
+}
+/* nested tips (a tipped button inside a tipped container): only the innermost
+   hovered tip shows, like native tooltips did */
+[data-tip]:hover:has([data-tip]:hover)::after {
+  opacity: 0;
+  transition: none;
+}
+
+/* custom confirm modal */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--page) 70%, transparent);
+  backdrop-filter: blur(3px);
+}
+.modal {
+  width: min(360px, calc(100vw - 48px));
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-surface);
+  padding: 18px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+.modal-msg {
+  font-size: 14px;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+.modal-actions button {
+  height: 32px;
+  padding: 0 12px;
+}
+.modal .m-danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+  font-weight: 600;
+}
+.modal-help {
+  width: min(560px, calc(100vw - 48px));
+  max-height: 82vh;
+  overflow-y: auto;
+}
+.modal-help h3 {
+  font-family: 'Fraunces', Georgia, serif;
+  font-size: 17px;
+  margin-bottom: 10px;
+}
+.modal-help ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--fg-subtle);
+}
+.modal-help li b {
+  color: var(--fg);
+  font-weight: 600;
 }
 
 /* toast */

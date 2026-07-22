@@ -312,7 +312,11 @@ function primaryFromTheme(install, themeName) {
     }
   }
   if (!t) return null
+  return themeToPrimary(t)
+}
 
+// Theme-file object -> primary-settings shape (the subset a theme can carry).
+function themeToPrimary(t) {
   const out = {
     stringSettings: {},
     floatSettings: {},
@@ -372,6 +376,20 @@ function primaryFromTheme(install, themeName) {
 // '!' sorts before digits and letters, so the proxy sits at the top of the
 // game's alphabetically-ordered theme list.
 const PROXY_THEME = '!KovaPreset'
+
+// The proxy file's contents in primary-settings shape - what the game is
+// actually rendering while the proxy theme is selected. Single fixed-name file
+// read (no directory scan), cheap enough for the state poll path.
+function readProxyPrimary(install) {
+  try {
+    const t = JSON.parse(
+      fs.readFileSync(path.join(paths(install).themes, `${PROXY_THEME}.json`), 'utf8')
+    )
+    return themeToPrimary(t)
+  } catch {
+    return null
+  }
+}
 
 // Inverse of primaryFromTheme: build a theme-file object from the preset's
 // primary-shaped fields. Only fields the preset actually has are written.
@@ -550,6 +568,7 @@ module.exports = {
   readResolution,
   isGameRunning,
   PROXY_THEME,
+  readProxyPrimary,
   writeProxyTheme,
   proxyThemeSelected,
 }

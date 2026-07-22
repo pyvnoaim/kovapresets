@@ -13,17 +13,18 @@
       </div>
       <div class="topbar-right">
         <div id="theme-seg" class="seg">
-          <button data-theme="system" title="Follow system">System</button>
-          <button data-theme="light" title="Light">Light</button>
-          <button data-theme="dark" title="Dark">Dark</button>
+          <button data-theme="system" data-tip="Follow system">System</button>
+          <button data-theme="light" data-tip="Light theme">Light</button>
+          <button data-theme="dark" data-tip="Dark theme">Dark</button>
         </div>
         <span id="game-pill" class="pill pill-off">KovaaK's: checking…</span>
-        <button id="launch" class="ghost hidden" title="Launch KovaaK's via Steam">Launch</button>
-        <button id="refresh" class="ghost" title="Re-scan install &amp; game state">↻</button>
+        <button id="launch" class="ghost hidden" data-tip="Launch KovaaK's via Steam">Launch</button>
+        <button id="help" class="ghost" data-tip="How KovaPresets works">?</button>
+        <button id="refresh" class="ghost" data-tip="Re-scan install &amp; game state">↻</button>
       </div>
       <div class="win-controls">
-        <button id="win-min" aria-label="Minimize" title="Minimize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg></button>
-        <button id="win-close" aria-label="Close" title="Close to tray"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        <button id="win-min" aria-label="Minimize" data-tip="Minimize"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg></button>
+        <button id="win-close" aria-label="Close" data-tip="Close to tray"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       </div>
     </header>
 
@@ -37,8 +38,8 @@
         <div class="section-head">
           <h2>Active setup</h2>
           <div class="section-actions">
-            <button id="deactivate" class="hidden" title="Put every setting back to how it was before KovaPresets applied anything">Restore original setup</button>
-            <button id="open-hud">HUD editor</button>
+            <button id="deactivate" class="hidden tip-wrap" data-tip="Put every setting back to how it was before KovaPresets applied anything">Restore original setup</button>
+            <button id="open-hud">HUD Editor</button>
             <button id="capture">Capture as preset</button>
           </div>
         </div>
@@ -48,7 +49,7 @@
           <h2>Presets</h2>
           <div class="section-actions">
             <span id="preset-count" class="muted"></span>
-            <button id="import" title="Import presets from a shared file">Import</button>
+            <button id="import" data-tip="Import presets from a shared file">Import</button>
             <button id="toggle-builder">New preset</button>
           </div>
         </div>
@@ -78,26 +79,26 @@
               <span class="field-label">Hit sound</span>
               <div class="input-play">
                 <input id="b-sound" type="text" placeholder="Search sounds…" spellcheck="false" />
-                <button id="b-sound-play" class="play" title="Preview" type="button">▶</button>
+                <button id="b-sound-play" class="play" data-tip="Preview" type="button">▶</button>
               </div>
             </label>
             <label class="field">
               <span class="field-label">Kill sound</span>
               <div class="input-play">
                 <input id="b-killsound" type="text" placeholder="Search sounds…" spellcheck="false" />
-                <button id="b-killsound-play" class="play" title="Preview" type="button">▶</button>
+                <button id="b-killsound-play" class="play" data-tip="Preview" type="button">▶</button>
               </div>
             </label>
-            <label class="field">
+            <label class="field tip-wrap" data-tip="Applied as a scenario sens override in your current sens scale - goes live on scenario entry">
               <span class="field-label">Sens</span>
-              <input id="b-sens" type="text" inputmode="decimal" placeholder="keep current" spellcheck="false" title="Applied as a scenario sens override in your current sens scale - goes live on scenario entry" />
+              <input id="b-sens" type="text" inputmode="decimal" placeholder="keep current" spellcheck="false" />
             </label>
-            <label class="field">
+            <label class="field tip-wrap" data-tip="Game DPI setting - applies when KovaaK's next starts (or quits)">
               <span class="field-label">DPI</span>
-              <input id="b-dpi" type="text" inputmode="numeric" placeholder="keep current" spellcheck="false" title="Game DPI setting - applies when KovaaK's next starts (or quits)" />
+              <input id="b-dpi" type="text" inputmode="numeric" placeholder="keep current" spellcheck="false" />
             </label>
           </div>
-          <p class="builder-note muted">
+          <p id="b-note" class="builder-note muted">
             Palette, HUD layout, and pitch/volume settings are carried over from your current setup.
             Sens uses your current sens scale; DPI applies on the game's next launch.
           </p>
@@ -118,9 +119,12 @@
       </section>
       <section id="hud-view" class="hidden">
         <div class="section-head">
-          <h2>HUD editor</h2>
+          <h2>HUD Editor</h2>
           <div class="section-actions">
             <span id="hud-hint" class="muted"></span>
+            <button id="hud-undo" class="icon-btn" data-tip="Undo (Ctrl+Z)" aria-label="Undo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg></button>
+            <button id="hud-redo" class="icon-btn" data-tip="Redo (Ctrl+Y)" aria-label="Redo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13"/></svg></button>
+            <button id="hud-reset" class="tip-wrap" data-tip="Throw away all edits and go back to the saved layout">Reset</button>
             <button id="hud-cancel">Back</button>
             <button id="hud-save" class="primary">Save layout</button>
           </div>
@@ -140,22 +144,32 @@
           <button id="hud-center-v">Center vertically</button>
         </div>
         <div id="hud-align" class="hud-inspector hidden">
-          <span class="field-label">Align <span id="hud-align-count"></span></span>
-          <button data-align="left">Left</button>
-          <button data-align="hcenter">H-center</button>
-          <button data-align="right">Right</button>
-          <button data-align="top">Top</button>
-          <button data-align="vcenter">V-center</button>
-          <button data-align="bottom">Bottom</button>
-          <span class="field-label">Distribute</span>
-          <button data-align="disth">Horizontally</button>
-          <button data-align="distv">Vertically</button>
+          <div class="align-row">
+            <span class="field-label">Align <span id="hud-align-count"></span></span>
+            <button data-align="left">Left</button>
+            <button data-align="hcenter">H-center</button>
+            <button data-align="right">Right</button>
+            <button data-align="top">Top</button>
+            <button data-align="vcenter">V-center</button>
+            <button data-align="bottom">Bottom</button>
+          </div>
+          <div class="align-row">
+            <span class="field-label">Distribute</span>
+            <button data-align="disth">Horizontally</button>
+            <button data-align="distv">Vertically</button>
+          </div>
+          <div class="align-row">
+            <span class="field-label">Space evenly</span>
+            <button data-align="evenh" data-tip="Spread across the full screen width - equal gaps, edges included">Across width</button>
+            <button data-align="evenv" data-tip="Spread across the full screen height - equal gaps, edges included">Across height</button>
+          </div>
         </div>
         <p class="muted hud-note">
           Drag windows to reposition - they snap to screen center, edges, other windows, and
           equal spacing. Shift-click to multi-select for align/distribute. Arrow keys nudge 1px
-          (Shift = 10px). Drag the corner handle of a selected window to calibrate its real size.
-          Layout applies when KovaaK's is closed, or queues for its next quit.
+          (Shift = 10px). Drag the corner handle of a selected window to calibrate its real size
+          (double-click the handle to reset it). Layout applies when KovaaK's is closed, or
+          queues for its next quit.
         </p>
       </section>
     </main>

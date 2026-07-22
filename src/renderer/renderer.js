@@ -4,6 +4,23 @@ const $ = (sel) => document.querySelector(sel)
 let current = null // last state snapshot
 let dragReordering = false // true while a preset row is being dragged
 
+// win.removeMenu() + frameless killed Electron's built-in accelerators, so
+// reload/devtools have to be restored by hand
+window.addEventListener('keydown', async (e) => {
+  if ((e.ctrlKey && e.key.toLowerCase() === 'r') || e.key === 'F5') {
+    e.preventDefault()
+    // reloading nukes unsaved HUD edits - same guard as the editor's Back button
+    if (
+      !$('#hud-view').classList.contains('hidden') &&
+      hud.dirty &&
+      !(await appConfirm('Reload and discard your HUD changes?', { okLabel: 'Reload', danger: true }))
+    )
+      return
+    location.reload()
+  }
+  if (e.key === 'F12') window.kova.toggleDevtools()
+})
+
 // ---- theme (system / light / dark), mirrors the website's class mechanism -----
 function applyTheme(mode) {
   const root = document.documentElement
@@ -32,13 +49,11 @@ const ICON = {
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m2 0v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6"/><path d="M10 11v6M14 11v6"/></svg>',
   check:
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
-  play:
-    '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5v14l11-7z"/></svg>',
   copy:
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
   grip:
     '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>',
-  key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="10" rx="2"/><path d="M6 11v2M10 11v2M14 11v2M18 11v2"/></svg>',
+  key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>',
   share:
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m8 7 4-4 4 4"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>',
 }
@@ -238,6 +253,77 @@ function drawCrosshair(canvas, file, colorCC) {
   img.addEventListener('load', () => paint(img), { once: true })
 }
 
+// ---- custom confirm (replaces the native OS confirm popup) ---------------------
+function appConfirm(message, { okLabel = 'OK', danger = false } = {}) {
+  return new Promise((resolve) => {
+    const wrap = document.createElement('div')
+    wrap.className = 'modal-backdrop'
+    wrap.innerHTML = `
+      <div class="modal" role="dialog" aria-modal="true">
+        <p class="modal-msg">${esc(message)}</p>
+        <div class="modal-actions">
+          <button class="m-cancel">Cancel</button>
+          <button class="m-ok${danger ? ' m-danger' : ' primary'}">${esc(okLabel)}</button>
+        </div>
+      </div>`
+    const done = (v) => {
+      document.removeEventListener('keydown', onKey, true)
+      wrap.remove()
+      resolve(v)
+    }
+    const onKey = (e) => {
+      e.stopPropagation()
+      if (e.key === 'Escape') done(false)
+      if (e.key === 'Enter') done(true)
+    }
+    wrap.addEventListener('mousedown', (e) => {
+      if (e.target === wrap) done(false)
+    })
+    wrap.querySelector('.m-cancel').addEventListener('click', () => done(false))
+    wrap.querySelector('.m-ok').addEventListener('click', () => done(true))
+    document.addEventListener('keydown', onKey, true)
+    document.body.appendChild(wrap)
+    wrap.querySelector('.m-ok').focus()
+  })
+}
+
+// ---- help modal -----------------------------------------------------------------
+function showHelp() {
+  const wrap = document.createElement('div')
+  wrap.className = 'modal-backdrop'
+  wrap.innerHTML = `
+    <div class="modal modal-help" role="dialog" aria-modal="true">
+      <h3>How it works</h3>
+      <ul>
+        <li><b>Presets</b> save your KovaaK's look &amp; sound: crosshair, theme, sounds, HUD, sens. Applying writes the game's own settings files.</li>
+        <li><b>Going live:</b> crosshair, sounds and scenario sens apply on the next scenario load. Theme: open the game's settings once. The rest lands when the game quits or starts.</li>
+        <li><b>Once:</b> select the <b>!KovaPreset</b> theme in-game so themes can swap live.</li>
+        <li><b>Re-enter now</b> reloads your scenario via Steam so changes kick in. The run auto-starts, press your reset bind when ready.</li>
+        <li><b>Hotkeys</b> (bolt icon) work even in-game, and stay alive in the tray when you close the window.</li>
+        <li><b>Restore original setup</b> reverts everything back to before KovaPresets.</li>
+        <li><b>One rule:</b> while a preset is applied, change these settings here, not in KovaaK's, or the game overwrites them.</li>
+      </ul>
+      <div class="modal-actions"><button class="m-ok primary">Got it</button></div>
+    </div>`
+  const done = () => {
+    document.removeEventListener('keydown', onKey, true)
+    wrap.remove()
+  }
+  const onKey = (e) => {
+    if (e.key === 'Escape' || e.key === 'Enter') {
+      e.stopPropagation()
+      done()
+    }
+  }
+  wrap.addEventListener('mousedown', (e) => {
+    if (e.target === wrap) done()
+  })
+  wrap.querySelector('.m-ok').addEventListener('click', done)
+  document.addEventListener('keydown', onKey, true)
+  document.body.appendChild(wrap)
+  wrap.querySelector('.m-ok').focus()
+}
+
 // action = { label, run }: renders a button inside the toast (e.g. "Re-enter now")
 function toast(msg, kind = '', ms = 3600, action = null) {
   const el = $('#toast')
@@ -294,31 +380,88 @@ function sameVal(a, b) {
   if (na != null && nb != null) return Math.abs(na - nb) < 1e-4
   return JSON.stringify(a) === JSON.stringify(b)
 }
+// Only THEME-VISUAL fields decide theme identity - sounds/sens/DPI also live
+// in primary, and a one-point sens difference must not flip the theme label.
+const NON_THEME_KEY =
+  /Sound$|Pitch$|Volume$|^XSens$|^YSens$|^DPI$|^SensScaleString$|^SensitivityScaleTargetEnum$/
+
+// While the game runs it rewrites PrimaryUserSettings.json from launch-time
+// memory, so the settings file's theme fields go stale the moment a preset is
+// applied live. The proxy theme FILE (!KovaPreset.json) is what the game
+// actually renders - when the game is on the proxy, compare theme-visual keys
+// against it, and skip the few keys a theme file can't carry (WallMat/FloorMat
+// indices, two booleans) instead of comparing them against stale settings.
+function primaryMatches(preset, active, themeOnly) {
+  const raw = active.primary?.stringSettings?.CurrentThemeName || ''
+  const proxy =
+    (raw === '!KovaPreset' || raw === 'KovaPreset') && current?.proxyPrimary
+      ? current.proxyPrimary
+      : null
+  for (const section of Object.keys(preset.primary || {})) {
+    if (!section.match(/Settings$/)) continue
+    for (const [key, val] of Object.entries(preset.primary[section] || {})) {
+      if (key === 'CurrentThemeName') continue
+      const themeKey = !NON_THEME_KEY.test(key)
+      if (themeOnly && !themeKey) continue
+      if (proxy && themeKey) {
+        if (!(key in (proxy[section] || {}))) continue
+        if (!sameVal(val, proxy[section][key])) return false
+      } else if (!sameVal(val, active.primary?.[section]?.[key])) return false
+    }
+  }
+  return true
+}
+
 function isActive(preset, active) {
   for (const k of Object.keys(preset.weapon || {}))
     if (!sameVal(preset.weapon[k] ?? '', active.weapon?.[k] ?? '')) return false
-  for (const section of Object.keys(preset.primary || {}))
-    for (const [key, val] of Object.entries(preset.primary[section] || {})) {
-      if (key === 'CurrentThemeName') continue
-      if (!sameVal(val, active.primary?.[section]?.[key])) return false
-    }
-  return true
+  return primaryMatches(preset, active, false)
 }
 
 // Quiet meta line under the name: theme · crosshair file · hit sound (+ play).
 // The crosshair PREVIEW lives in the tile at the row start, not here.
 function summaryHtml(preset) {
   const parts = []
+  const sndChip = (label, name) =>
+    `<span class="sm-val sm-sound"><span class="sm-k">${label}</span><span class="sm-name">${esc(name)}</span></span>`
   if (themeName(preset)) parts.push(`<span class="sm-val">${esc(themeName(preset))}</span>`)
-  if (crosshair(preset)) parts.push(`<span class="sm-val">${esc(noExt(crosshair(preset)))}</span>`)
+  if (crosshair(preset)) {
+    const scale = parseFloat(preset.weapon?.CrosshairScale)
+    const scaleTag =
+      scale && scale !== 1 ? ` <span class="sm-k">${esc(String(scale))}x</span>` : ''
+    parts.push(`<span class="sm-val">${esc(noExt(crosshair(preset)))}${scaleTag}</span>`)
+  }
   const sens = sensOf(preset)
-  if (sens) parts.push(`<span class="sm-val">${esc(Math.round(Number(sens.value) * 100) / 100)} sens</span>`)
-  if (bodyHit(preset))
+  if (sens)
     parts.push(
-      `<span class="sm-val sm-sound">${esc(bodyHit(preset))}<button class="play play-hit" title="Preview">${ICON.play}</button></span>`
+      `<span class="sm-val"><span class="sm-k">sens</span>${esc(Math.round(Number(sens.value) * 100) / 100)}</span>`
     )
+  const dpi = preset.primary?.integerSettings?.DPI
+  if (dpi != null) parts.push(`<span class="sm-val"><span class="sm-k">dpi</span>${esc(dpi)}</span>`)
+  if (bodyHit(preset)) parts.push(sndChip('hit', bodyHit(preset)))
+  const kill = preset.primary?.stringSettings?.KillConfirmedSound
+  if (kill) parts.push(sndChip('kill', kill))
+  // spawn sound deliberately not chipped - it's in the hover tooltip + editor
   if (!parts.length) return '<span class="sm-empty">no changes</span>'
   return parts.join('<span class="sm-sep">·</span>')
+}
+
+// Plain-text version of the same summary - the row's hover tooltip, so chips
+// clipped off the one-line summary are still readable.
+function summaryText(preset) {
+  const parts = []
+  if (themeName(preset)) parts.push(themeName(preset))
+  if (crosshair(preset)) parts.push(noExt(crosshair(preset)))
+  const sens = sensOf(preset)
+  if (sens) parts.push(`sens ${Math.round(Number(sens.value) * 100) / 100}`)
+  const dpi = preset.primary?.integerSettings?.DPI
+  if (dpi != null) parts.push(`dpi ${dpi}`)
+  if (bodyHit(preset)) parts.push(`hit ${bodyHit(preset)}`)
+  const kill = preset.primary?.stringSettings?.KillConfirmedSound
+  if (kill) parts.push(`kill ${kill}`)
+  const spawn = preset.primary?.stringSettings?.SpawnSound
+  if (spawn) parts.push(`spawn ${spawn}`)
+  return parts.join(' · ')
 }
 
 // ---- render -------------------------------------------------------------------
@@ -328,15 +471,7 @@ function summaryHtml(preset) {
 function activeThemeLabel(active, presets) {
   const raw = active.primary?.stringSettings?.CurrentThemeName || ''
   if (raw !== '!KovaPreset' && raw !== 'KovaPreset') return { name: raw, liveSwap: false }
-  const match = (presets || []).find((p) => {
-    for (const section of Object.keys(p.primary || {}))
-      for (const [key, val] of Object.entries(p.primary[section] || {})) {
-        if (key === 'CurrentThemeName') continue
-        if (!section.match(/Settings$/)) continue
-        if (!sameVal(val, active.primary?.[section]?.[key])) return false
-      }
-    return true
-  })
+  const match = (presets || []).find((p) => primaryMatches(p, active, true))
   // liveSwap: the game is on the proxy theme, so theme applies swap without a
   // game restart (shown as a sub-line, not glued to the name)
   const real = match ? themeName(match) : ''
@@ -399,14 +534,14 @@ function renderPresets(presets, active) {
         <canvas class="xprev" width="44" height="44"></canvas>
         <button type="button" class="xcolor tile-color" data-tip="Crosshair color" aria-label="Crosshair color"><span class="cp-mini" style="background:${colorToHex(preset.weapon?.CrosshairColor)}"></span></button>
       </div>
-      <div class="info">
-        <label class="name-field" title="Click to rename">
-          ${ICON.pencil}
+      <div class="info tip-wrap"${summaryText(preset) ? ` data-tip="${esc(summaryText(preset))}"` : ''}>
+        <label class="name-field" data-tip="Click to rename">
           <input class="name" value="${esc(preset.name)}" spellcheck="false" aria-label="Preset name" />
         </label>
         <div class="summary">${summaryHtml(preset)}</div>
       </div>
       <div class="actions">
+        <button class="edit quiet" data-tip="Edit" aria-label="Edit preset">${ICON.pencil}</button>
         <button class="dup quiet" data-tip="Duplicate" aria-label="Duplicate preset">${ICON.copy}</button>
         <button class="exp quiet" data-tip="Export to a file (share it)" aria-label="Export preset">${ICON.share}</button>
         <button class="del quiet" data-tip="Delete" aria-label="Delete preset">${ICON.trash}</button>
@@ -451,8 +586,7 @@ function renderPresets(presets, active) {
         })
       })
     }
-    const playBtn = row.querySelector('.play-hit')
-    if (playBtn) playBtn.addEventListener('click', () => playSound(bodyHit(preset)))
+    row.querySelector('.edit').addEventListener('click', () => openEditor(preset))
 
     row.querySelector('.hotkey').addEventListener('click', (e) => recordHotkey(preset, e.currentTarget))
     row.querySelector('.dup').addEventListener('click', async () => {
@@ -734,39 +868,63 @@ makeCombo(
 makeCombo($('#b-sound'), () => current?.options?.sounds || [])
 makeCombo($('#b-killsound'), () => current?.options?.sounds || [])
 
-function populateBuilder() {
+// The builder doubles as the preset editor: editingPresetId null = create mode
+// (placeholders show the ACTIVE setup, "leave empty keeps current"), an id =
+// edit mode (placeholders show the PRESET's values, empty keeps them).
+let editingPresetId = null
+let builderColorTouched = false // edit mode: only send a color the user picked
+
+function populateBuilder(preset) {
   if (!current?.options) return
-  // placeholders show what "leave empty" keeps
-  $('#b-theme').placeholder = `keep current (${activeThemeLabel(current.active, current.presets).name || 'none'})`
-  $('#b-crosshair').placeholder = `keep current (${noExt(crosshair(current.active)) || 'none'})`
-  $('#b-sound').placeholder = `keep current (${bodyHit(current.active) || 'none'})`
-  const curSens = sensOf(current.active)
+  editingPresetId = preset ? preset.id : null
+  const src = preset || current.active
+  const themeLabel = preset
+    ? themeName(preset)
+    : activeThemeLabel(current.active, current.presets).name
+  $('#b-theme').placeholder = `keep current (${themeLabel || 'none'})`
+  $('#b-crosshair').placeholder = `keep current (${noExt(crosshair(src)) || 'none'})`
+  $('#b-sound').placeholder = `keep current (${bodyHit(src) || 'none'})`
+  const curSens = sensOf(src)
   $('#b-sens').placeholder =
     `keep current (${curSens ? Math.round(Number(curSens.value) * 100) / 100 : 'none'})`
-  $('#b-dpi').placeholder =
-    `keep current (${current.active.primary?.integerSettings?.DPI ?? 'none'})`
-  const hex = colorToHex(current.active?.weapon?.CrosshairColor)
+  $('#b-dpi').placeholder = `keep current (${src.primary?.integerSettings?.DPI ?? 'none'})`
+  const hex = colorToHex(src?.weapon?.CrosshairColor)
+  builderColorTouched = false
   $('#b-color').dataset.value = hex
   $('#b-color').firstElementChild.style.background = hex
   $('#b-color-hex').textContent = hex
-  $('#b-name').value = ''
+  $('#b-name').value = preset ? preset.name : ''
   $('#b-theme').value = ''
   $('#b-sens').value = ''
   $('#b-dpi').value = ''
   $('#b-crosshair').value = ''
   $('#b-sound').value = ''
   $('#b-killsound').value = ''
+  $('#b-create').textContent = preset ? 'Save changes' : 'Create preset'
+  $('#b-note').textContent = preset
+    ? 'Empty fields keep the preset as it is. Palette and HUD layout stay untouched.'
+    : 'Palette, HUD layout, and pitch/volume settings are carried over from your current setup. Sens uses your current sens scale; DPI applies on the game\'s next launch.'
+}
+
+function openEditor(preset) {
+  populateBuilder(preset)
+  builder.classList.remove('hidden')
+  $('#b-name').focus()
 }
 
 $('#toggle-builder').addEventListener('click', () => {
-  const show = builder.classList.contains('hidden')
+  const show = builder.classList.contains('hidden') || editingPresetId != null
   if (show) populateBuilder()
   builder.classList.toggle('hidden', !show)
 })
-$('#b-cancel').addEventListener('click', () => builder.classList.add('hidden'))
+$('#b-cancel').addEventListener('click', () => {
+  editingPresetId = null
+  builder.classList.add('hidden')
+})
 $('#b-color').addEventListener('click', () => {
   const btn = $('#b-color')
   cpick.show(btn, btn.dataset.value || '#ffffff', (hexVal) => {
+    builderColorTouched = true
     btn.dataset.value = hexVal
     btn.firstElementChild.style.background = hexVal
     $('#b-color-hex').textContent = hexVal
@@ -792,10 +950,17 @@ $('#b-create').addEventListener('click', async () => {
   let picks
   try {
     picks = {
-      name: $('#b-name').value.trim() || `Preset ${(current?.presets?.length || 0) + 1}`,
+      name:
+        $('#b-name').value.trim() ||
+        (editingPresetId ? null : `Preset ${(current?.presets?.length || 0) + 1}`),
       theme: pick('#b-theme', opts.themes, 'theme'),
       crosshair: pick('#b-crosshair', opts.crosshairs, 'crosshair'),
-      crosshairColor: hexToColor($('#b-color').dataset.value || '#ffffff'),
+      // edit mode: an untouched picker sends nothing, so a preset with no
+      // color of its own doesn't silently gain the seeded white
+      crosshairColor:
+        editingPresetId && !builderColorTouched
+          ? null
+          : hexToColor($('#b-color').dataset.value || '#ffffff'),
       bodyHit: pick('#b-sound', opts.sounds, 'sound'),
       killSound: pick('#b-killsound', opts.sounds, 'sound'),
       sens: numPick('#b-sens', 'sens', false),
@@ -804,12 +969,19 @@ $('#b-create').addEventListener('click', async () => {
   } catch (err) {
     return toast(esc(err.message), 'err')
   }
-  current.presets = await window.kova.build(picks)
+  if (editingPresetId) {
+    current.presets = await window.kova.updatePreset(editingPresetId, picks)
+    editingPresetId = null
+    toast('Preset updated.', 'ok')
+  } else {
+    current.presets = await window.kova.build(picks)
+    toast('Preset created.', 'ok')
+  }
   renderPresets(current.presets, current.active)
   builder.classList.add('hidden')
-  toast('Preset created.', 'ok')
 })
 $('#refresh').addEventListener('click', () => refresh(true)) // manual = full re-scan
+$('#help').addEventListener('click', showHelp)
 $('#win-min').addEventListener('click', () => window.kova.winMinimize())
 $('#win-close').addEventListener('click', () => window.kova.winClose())
 $('#launch').addEventListener('click', async () => {
