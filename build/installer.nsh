@@ -21,6 +21,7 @@
 !endif
 
 !macro customUnInit
+  ClearErrors
   ${GetParameters} $R0
   ${GetOptions} $R0 "/S" $R1
   ${If} ${Errors}
