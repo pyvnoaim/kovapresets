@@ -11,15 +11,20 @@ Windows only (KovaaK's is a Windows game). Free and open source.
 
 ## Install
 
-Grab the latest **KovaPresets Setup exe** from the
-[releases page](https://github.com/pyvnoaim/kovapresets/releases/latest) and run it.
+Paste this into PowerShell:
 
-It installs for your user only, so there's no admin prompt, and it finds your
-KovaaK's install automatically through Steam.
+```powershell
+irm https://pyvno.xyz/install.ps1 | iex
+```
 
-Windows SmartScreen will likely warn you the first time, because the installer
-isn't code-signed yet. Click **More info → Run anyway**. The app updates itself
-from this repo's releases from then on.
+That grabs the newest release and runs it. No admin rights needed, KovaPresets
+installs for your user only, and it finds your KovaaK's install through Steam by
+itself. From then on the app updates itself, so you only ever run this once.
+
+Prefer clicking? Download the **KovaPresets Setup exe** from the
+[releases page](https://github.com/pyvnoaim/kovapresets/releases/latest) instead.
+Windows SmartScreen will warn you the first time you run a downloaded copy,
+because the installer isn't code-signed yet, click **More info → Run anyway**.
 
 ## What it does
 
