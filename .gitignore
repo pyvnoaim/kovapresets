@@ -2,3 +2,5 @@ node_modules/
 dist/
 out/
 *.log
+# personal preset exports saved into the repo folder
+*.kovapreset.json

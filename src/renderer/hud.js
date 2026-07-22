@@ -33,6 +33,53 @@ const hud = {
   factor: 1, // canvas px per game unit
   selection: new Set(),
   dirty: false,
+  history: [], // snapshots; [0] is the saved layout at open
+  histIdx: -1,
+}
+
+// ---- undo / redo ---------------------------------------------------------------
+function hudSnapshot() {
+  return JSON.stringify(hud.items)
+}
+function hudCommit() {
+  const snap = hudSnapshot()
+  if (hud.history[hud.histIdx] === snap) return // mutation was a no-op
+  hud.history = hud.history.slice(0, hud.histIdx + 1)
+  hud.history.push(snap)
+  hud.histIdx++
+  hudHistoryUi()
+}
+function hudRestore(idx) {
+  hud.histIdx = idx
+  hud.items = JSON.parse(hud.history[idx])
+  // selection entries point at replaced objects - remap them by window name
+  const byName = new Map(hud.items.map((i) => [i.name, i]))
+  hud.selection = new Set([...hud.selection].map((i) => byName.get(i.name)).filter(Boolean))
+  hud.dirty = hud.history[idx] !== hud.history[0]
+  hudRender()
+  hudRenderInspector()
+  hudHistoryUi()
+}
+// A nudge burst commits on a delay - land it before jumping through history,
+// or an undo inside the delay window would skip the nudge entirely.
+function flushNudgeCommit() {
+  if (!nudgeCommitT) return
+  clearTimeout(nudgeCommitT)
+  nudgeCommitT = null
+  hudCommit()
+}
+function hudUndo() {
+  flushNudgeCommit()
+  if (hud.histIdx > 0) hudRestore(hud.histIdx - 1)
+}
+function hudRedo() {
+  flushNudgeCommit()
+  if (hud.histIdx < hud.history.length - 1) hudRestore(hud.histIdx + 1)
+}
+function hudHistoryUi() {
+  $('#hud-undo').disabled = hud.histIdx <= 0
+  $('#hud-redo').disabled = hud.histIdx >= hud.history.length - 1
+  $('#hud-reset').disabled = hud.histIdx === 0
 }
 
 const selOnly = () => (hud.selection.size === 1 ? [...hud.selection][0] : null)
@@ -91,11 +138,19 @@ function hudRender() {
     el.style.top = `${item.y * hud.factor}px`
     el.style.width = `${size.w * hud.factor}px`
     el.style.height = `${size.h * hud.factor}px`
-    el.innerHTML = `<span>${esc(item.name)}</span>${selected && hud.selection.size === 1 ? '<div class="hud-resize" title="Drag to calibrate this window\'s real size"></div>' : ''}`
+    el.innerHTML = `<span>${esc(item.name)}</span>${selected && hud.selection.size === 1 ? '<div class="hud-resize"></div>' : ''}`
     el.addEventListener('pointerdown', (e) => {
       if (e.target.classList.contains('hud-resize')) hudStartResize(item, el, e)
       else hudStartDrag(item, el, e)
     })
+    const rz = el.querySelector('.hud-resize')
+    if (rz)
+      rz.addEventListener('dblclick', () => {
+        delete hudSizeOverrides[item.name]
+        localStorage.setItem('hudSizeOverrides', JSON.stringify(hudSizeOverrides))
+        toast(`${esc(item.name)} size reset to the built-in estimate.`, 'ok')
+        hudRender()
+      })
     canvas.appendChild(el)
   }
   hudRenderInspector()
@@ -338,6 +393,7 @@ function hudStartDrag(item, el, e) {
     window.removeEventListener('pointermove', move)
     window.removeEventListener('pointerup', up)
     hudShowGuides([])
+    hudCommit()
   }
   window.addEventListener('pointermove', move)
   window.addEventListener('pointerup', up)
@@ -373,6 +429,9 @@ function hudStartResize(item, el, e) {
   window.addEventListener('pointerup', up)
 }
 
+// A held arrow key repeats ~30/s - collapse the burst into ONE history entry
+// (committed shortly after the last press) or undo unwinds pixel by pixel.
+let nudgeCommitT = null
 function hudNudge(dx, dy) {
   if (!hud.selection.size) return
   for (const item of hud.selection) {
@@ -382,6 +441,8 @@ function hudNudge(dx, dy) {
   }
   hud.dirty = true
   hudRender()
+  clearTimeout(nudgeCommitT)
+  nudgeCommitT = setTimeout(hudCommit, 400)
 }
 
 // ---- align / distribute -------------------------------------------------------
@@ -421,12 +482,37 @@ function hudAlign(mode) {
       cursor += b.s.h + gap
     }
   }
+  // space-evenly across the whole screen: equal gaps between windows AND to
+  // both screen edges (distribute keeps the outermost windows pinned instead)
+  if (mode === 'evenh') {
+    boxes.sort((a, b) => a.m.x - b.m.x)
+    const used = boxes.reduce((n, b) => n + b.s.w, 0)
+    // gap floors at 0: windows wider than the screen pack from the left edge
+    // instead of being pushed off-screen by a negative gap
+    const gap = Math.max(0, (hud.res.x - used) / (boxes.length + 1))
+    let cursor = gap
+    for (const b of boxes) {
+      b.m.x = cursor
+      cursor += b.s.w + gap
+    }
+  }
+  if (mode === 'evenv') {
+    boxes.sort((a, b) => a.m.y - b.m.y)
+    const used = boxes.reduce((n, b) => n + b.s.h, 0)
+    const gap = Math.max(0, (hud.res.y - used) / (boxes.length + 1))
+    let cursor = gap
+    for (const b of boxes) {
+      b.m.y = cursor
+      cursor += b.s.h + gap
+    }
+  }
   for (const b of boxes) {
     b.m.x = Math.round(b.m.x * 2) / 2
     b.m.y = Math.round(b.m.y * 2) / 2
   }
   hud.dirty = true
   hudRender()
+  hudCommit()
 }
 
 // ---- open/close/save ----------------------------------------------------------
@@ -436,6 +522,9 @@ function hudOpen() {
   hud.items = hudParse(current.active?.ui)
   hud.selection = new Set()
   hud.dirty = false
+  hud.history = [hudSnapshot()]
+  hud.histIdx = 0
+  hudHistoryUi()
   $('#content').classList.add('hidden')
   $('#hud-view').classList.remove('hidden')
   $('#hud-hint').textContent = `${hud.res.x}×${hud.res.y}`
@@ -456,9 +545,16 @@ function hudClose() {
 }
 
 $('#open-hud').addEventListener('click', hudOpen)
-$('#hud-cancel').addEventListener('click', () => {
-  if (hud.dirty && !confirm('Discard HUD changes?')) return
+$('#hud-cancel').addEventListener('click', async () => {
+  if (hud.dirty && !(await appConfirm('Discard your HUD changes?', { okLabel: 'Discard', danger: true })))
+    return
   hudClose()
+})
+$('#hud-undo').addEventListener('click', hudUndo)
+$('#hud-redo').addEventListener('click', hudRedo)
+$('#hud-reset').addEventListener('click', () => {
+  flushNudgeCommit()
+  hudRestore(0) // back to the saved layout (redoable)
 })
 $('#hud-save').addEventListener('click', async () => {
   const { status } = await window.kova.hudSave(hudSerialize())
@@ -473,16 +569,26 @@ $('#hud-save').addEventListener('click', async () => {
 $('#hud-sel-scale').addEventListener('input', (e) => {
   const item = selOnly()
   if (!item) return
-  item.scale = parseFloat(e.target.value)
+  // magnetic detent at 1.00 - the track is narrower than its 175 steps, so a
+  // drag can land on 0.99/1.01 with no pixel that yields exactly 1
+  let v = parseFloat(e.target.value)
+  if (Math.abs(v - 1) < 0.015) {
+    v = 1
+    e.target.value = '1'
+  }
+  item.scale = v
   hud.dirty = true
   hudRender()
 })
+// one history entry per slider release, not per tick
+$('#hud-sel-scale').addEventListener('change', hudCommit)
 $('#hud-center-h').addEventListener('click', () => {
   const item = selOnly()
   if (!item) return
   item.x = Math.round((hud.res.x / 2 - hudSizeOf(item).w / 2) * 2) / 2
   hud.dirty = true
   hudRender()
+  hudCommit()
 })
 $('#hud-center-v').addEventListener('click', () => {
   const item = selOnly()
@@ -490,12 +596,22 @@ $('#hud-center-v').addEventListener('click', () => {
   item.y = Math.round((hud.res.y / 2 - hudSizeOf(item).h / 2) * 2) / 2
   hud.dirty = true
   hudRender()
+  hudCommit()
 })
 document.querySelectorAll('#hud-align [data-align]').forEach((b) =>
   b.addEventListener('click', () => hudAlign(b.dataset.align))
 )
 window.addEventListener('keydown', (e) => {
-  if ($('#hud-view').classList.contains('hidden') || !hud.selection.size) return
+  if ($('#hud-view').classList.contains('hidden')) return
+  if (e.ctrlKey && e.key.toLowerCase() === 'z') {
+    e.preventDefault()
+    return e.shiftKey ? hudRedo() : hudUndo()
+  }
+  if (e.ctrlKey && e.key.toLowerCase() === 'y') {
+    e.preventDefault()
+    return hudRedo()
+  }
+  if (!hud.selection.size) return
   const step = e.shiftKey ? 10 : 1
   const map = {
     ArrowLeft: [-step, 0],

@@ -18,6 +18,15 @@ const store = require('./core/presets')
 
 const STEAM_APP_ID = '824270' // KovaaK's
 
+// One instance only: a second `npm start` focuses the existing window instead
+// of silently stacking another copy in the tray (the X hides to tray, so
+// "close then start again" would otherwise pile up instances).
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  app.on('second-instance', () => showWindow())
+}
+
 let win = null
 let tray = null
 let quitting = false
@@ -414,14 +423,13 @@ function createTray() {
 }
 
 // ---- IPC ----------------------------------------------------------------------
-ipcMain.handle('state', (_e, opts) => {
-  const install = findInstall(opts?.rescan)
-  if (!install) return { install: null }
+// Applies made while the game runs sit in pending.json until the game quits,
+// so the files still hold the old values. Merge the queued intent into the
+// reported state or the UI forgets what was applied (worst after an app
+// restart, when nothing else hints at it). Capture/build read through this
+// too, so they snapshot what the user SEES as active, not stale disk state.
+function readActiveMerged(install) {
   const active = k.readActive(install)
-  // Applies made while the game runs sit in pending.json until the game quits,
-  // so the files still hold the old values. Merge the queued intent into the
-  // reported state or the UI forgets what was applied (worst after an app
-  // restart, when nothing else hints at it).
   const pending = readPending()
   if (pending) {
     if (pending.primary && active.primary)
@@ -431,10 +439,22 @@ ipcMain.handle('state', (_e, opts) => {
     if (pending.ui != null) active.ui = pending.ui
     if (pending.weapon) active.weapon = { ...active.weapon, ...pending.weapon }
   }
+  return { active, pending: !!pending }
+}
+
+ipcMain.handle('state', (_e, opts) => {
+  const install = findInstall(opts?.rescan)
+  if (!install) return { install: null }
+  const { active, pending } = readActiveMerged(install)
   return {
     install,
     gameRunning: gameRunning(),
     active,
+    // What the proxy theme file actually holds - the renderer matches theme
+    // identity against this while the game is on the proxy, because the game
+    // rewrites PrimaryUserSettings.json from launch-time memory and its theme
+    // fields go stale the moment a preset is applied live.
+    proxyPrimary: k.readProxyPrimary(install),
     options: listOptionsCached(install, opts?.rescan),
     presets: loadPresetsMigrated(install),
     pending: !!pending,
@@ -446,14 +466,24 @@ ipcMain.handle('state', (_e, opts) => {
 ipcMain.handle('presets:capture', (_e, name) => {
   const install = requireInstall()
   const presets = store.load(userData())
-  presets.push({ id: store.newId(), name: name || 'New preset', ...k.readActive(install) })
+  presets.push({ id: store.newId(), name: name || 'New preset', ...readActiveMerged(install).active })
   store.save(userData(), presets)
   return presets
 })
 
+// Theme files carry material STRINGS but not the WallMat/FloorMat INDEX
+// fields, so overlaying a theme pick would leave the previous theme's indices
+// riding along and fighting the new materials on the launch path. Drop them -
+// the game re-derives and rewrites them itself when it loads the theme.
+function dropStaleMaterialIndices(primary) {
+  if (!primary.integerSettings) return
+  delete primary.integerSettings.WallMat
+  delete primary.integerSettings.FloorMat
+}
+
 ipcMain.handle('presets:build', (_e, picks) => {
   const install = requireInstall()
-  const active = k.readActive(install)
+  const { active } = readActiveMerged(install)
   const weapon = { ...active.weapon }
   if (picks.crosshair) weapon.CrosshairFile = picks.crosshair
   if (picks.crosshairColor) weapon.CrosshairColor = picks.crosshairColor
@@ -470,11 +500,13 @@ ipcMain.handle('presets:build', (_e, picks) => {
   const primary = JSON.parse(JSON.stringify(active.primary))
   if (picks.theme) {
     const fromTheme = k.primaryFromTheme(install, picks.theme)
-    if (fromTheme)
+    if (fromTheme) {
       for (const [section, fields] of Object.entries(fromTheme)) {
         if (!primary[section]) primary[section] = {}
         Object.assign(primary[section], fields)
       }
+      dropStaleMaterialIndices(primary)
+    }
   }
   if (picks.killSound != null) {
     if (!primary.stringSettings) primary.stringSettings = {}
@@ -495,6 +527,48 @@ ipcMain.handle('presets:build', (_e, picks) => {
     palette: active.palette,
     ui: active.ui,
   })
+  store.save(userData(), presets)
+  return presets
+})
+
+// Edit an existing preset: same picks shape as presets:build, but applied on
+// top of the preset's own data (empty pick = keep). Palette/HUD stay untouched.
+ipcMain.handle('presets:update', (_e, id, picks) => {
+  const install = requireInstall()
+  const presets = store.load(userData())
+  const p = presets.find((x) => x.id === id)
+  if (!p) return presets
+  if (picks.name) p.name = String(picks.name).slice(0, 80)
+  p.weapon = p.weapon || {}
+  if (picks.crosshair) p.weapon.CrosshairFile = picks.crosshair
+  if (picks.crosshairColor) p.weapon.CrosshairColor = picks.crosshairColor
+  if (picks.bodyHit != null) p.weapon.BodyHitSound = picks.bodyHit
+  const sens = Number(picks.sens)
+  if (picks.sens != null && Number.isFinite(sens) && sens > 0) {
+    p.weapon.OverrideSens = 'true'
+    p.weapon.HorizontalSens = String(sens)
+    p.weapon.VerticalSens = String(sens)
+  }
+  p.primary = p.primary || {}
+  if (picks.theme) {
+    const fromTheme = k.primaryFromTheme(install, picks.theme)
+    if (fromTheme) {
+      for (const [section, fields] of Object.entries(fromTheme)) {
+        if (!p.primary[section]) p.primary[section] = {}
+        Object.assign(p.primary[section], fields)
+      }
+      dropStaleMaterialIndices(p.primary)
+    }
+  }
+  if (picks.killSound != null) {
+    if (!p.primary.stringSettings) p.primary.stringSettings = {}
+    p.primary.stringSettings.KillConfirmedSound = picks.killSound
+  }
+  const dpi = Number(picks.dpi)
+  if (picks.dpi != null && Number.isFinite(dpi) && dpi > 0) {
+    if (!p.primary.integerSettings) p.primary.integerSettings = {}
+    p.primary.integerSettings.DPI = Math.round(dpi)
+  }
   store.save(userData(), presets)
   return presets
 })
@@ -566,6 +640,7 @@ ipcMain.handle('game:launch', () => {
 })
 
 ipcMain.handle('win:minimize', () => win?.minimize())
+ipcMain.handle('win:devtools', () => win?.webContents.toggleDevTools())
 ipcMain.handle('win:close', () => win?.close()) // routes through close-to-tray
 
 ipcMain.handle('settings:get', () => loadSettings())
