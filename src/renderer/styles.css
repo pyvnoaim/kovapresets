@@ -117,6 +117,11 @@ body {
   /* hidden [data-tip] bubbles are laid out even at opacity 0 - a wide tip near
      the window edge must never conjure a horizontal scrollbar */
   overflow-x: clip;
+  /* the window itself never scrolls - <main> is the scroller, so the navbar
+     sits outside it and can't shift when a scrollbar appears */
+  overflow-y: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .hidden {
@@ -137,6 +142,50 @@ body {
   position: sticky;
   top: 0;
   z-index: 5;
+  /* frameless window: the topbar doubles as the titlebar */
+  -webkit-app-region: drag;
+  height: 56px;
+  gap: 14px;
+  justify-content: flex-start;
+}
+.topbar button,
+.topbar .seg,
+.topbar .pill {
+  -webkit-app-region: no-drag;
+}
+.brand {
+  margin-right: auto;
+}
+/* custom caption buttons (frameless window) - minimize + close only */
+.win-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.win-controls button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  border-color: transparent;
+  color: var(--fg-muted);
+}
+.win-controls button:hover {
+  color: var(--fg);
+  background: var(--surface-raised);
+  border-color: var(--border);
+}
+#win-close:hover {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+.win-controls svg {
+  width: 14px;
+  height: 14px;
 }
 .brand {
   /* The display Fraunces (same face as the site's "kova." wordmark). */
@@ -207,10 +256,18 @@ body {
 }
 
 /* layout */
+/* main is the app's one scroller (full window width, so the scrollbar hugs the
+   window edge over plain page background); sections center the content */
 main {
-  padding: 22px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+main > section {
   max-width: 900px;
   margin: 0 auto;
+  padding: 22px;
 }
 .section-head {
   display: flex;
@@ -290,7 +347,9 @@ button.danger:hover {
 /* active setup grid */
 .active-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  /* all five cards on one line; minmax(0,1fr) lets long theme names shrink
+     instead of forcing a wrap, .value ellipsizes the overflow */
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
 }
 .stat {
@@ -298,6 +357,7 @@ button.danger:hover {
   border: 1px solid var(--border);
   border-radius: var(--radius-surface);
   padding: 14px 16px;
+  min-width: 0;
 }
 .stat .label {
   font-size: 11px;
@@ -306,15 +366,23 @@ button.danger:hover {
   color: var(--fg-muted);
   margin-bottom: 6px;
   font-family: 'JetBrains Mono', monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .stat .value {
   font-weight: 600;
-  word-break: break-word;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .stat .sub {
   color: var(--fg-muted);
   font-size: 12px;
   margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .section-actions {
@@ -457,6 +525,11 @@ button.danger:hover {
   gap: 8px;
   margin-top: 14px;
 }
+/* builder buttons match the section-head / navbar 32px scale */
+.builder-actions button {
+  height: 32px;
+  padding: 0 10px;
+}
 
 /* presets */
 .presets {
@@ -481,6 +554,11 @@ button.danger:hover {
 }
 .preset.dragging {
   opacity: 0.45;
+}
+/* while a row is held, everything shows the grabbing hand */
+body.row-dragging,
+body.row-dragging * {
+  cursor: grabbing !important;
 }
 .preset .grip {
   display: flex;
@@ -944,6 +1022,121 @@ button.play svg {
 .hud-note {
   font-size: 12px;
   margin-top: 10px;
+}
+
+/* popover color picker (vanilla port of the website's ColorPicker) */
+.color-pop {
+  position: fixed;
+  z-index: 240;
+  width: 240px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-surface);
+  padding: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+.cp-sv {
+  position: relative;
+  height: 144px;
+  border-radius: var(--radius-control);
+  cursor: crosshair;
+  touch-action: none;
+  background-image:
+    linear-gradient(to top, #000, transparent),
+    linear-gradient(to right, #fff, transparent);
+}
+.cp-dot {
+  pointer-events: none;
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  transform: translate(-50%, -50%);
+  border: 2px solid #fff;
+  border-radius: var(--radius-pill);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.cp-hue {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 12px;
+  margin-top: 12px;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(
+    to right,
+    #f00 0%, #ff0 17%, #0f0 33%, #0ff 50%, #00f 67%, #f0f 83%, #f00 100%
+  );
+  outline: none;
+}
+.cp-hue::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-pill);
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.25);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+.cp-hexrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  background: var(--page);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: 6px 8px;
+}
+.cp-swatch {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+}
+.cp-hex {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+/* swatch inside the trigger buttons that open the picker */
+.cp-mini {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-pill);
+}
+
+/* slim themed scrollbar instead of the stock Chromium one */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 999px;
+  /* transparent edge + padding-box clip = a slimmer-looking floating thumb */
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+  background-clip: padding-box;
+  border: 3px solid transparent;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* instant tooltips: any element with data-tip shows a styled bubble above it */
