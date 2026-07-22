@@ -196,6 +196,29 @@ function readFileOrNull(file) {
   }
 }
 
+// The scenarios the player played most recently, newest first, deduped: the
+// game writes "<scenario> - <mode> - <timestamp> Stats.csv" when a run ends,
+// and an apply mid-session virtually always happens between runs. Timestamp is
+// parsed from the filename - no per-file stat calls over years of runs.
+// [0] is the scenario to re-enter; [1] doubles as the "parking" hop target
+// (jumping to the scenario you're already in doesn't reload it, so re-enter
+// bounces through a different one first).
+function recentScenariosFromStats(install, count = 2) {
+  try {
+    const newest = new Map() // scenario -> newest ts
+    for (const f of fs.readdirSync(path.join(install, 'stats'))) {
+      const m = f.match(/^(.*) - .+ - (\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}\.\d{2}) Stats\.csv$/)
+      if (m && (!newest.has(m[1]) || m[2] > newest.get(m[1]))) newest.set(m[1], m[2])
+    }
+    return [...newest.entries()]
+      .sort((a, b) => (a[1] < b[1] ? 1 : -1))
+      .slice(0, count)
+      .map(([scenario]) => scenario)
+  } catch {
+    return []
+  }
+}
+
 // Full snapshot = exactly what a preset stores.
 function readActive(install) {
   const p = paths(install)
@@ -438,8 +461,11 @@ function applyWeapon(install, weapon) {
   const before = raw
   for (const k of WEAPON_KEYS) {
     if (weapon[k] == null) continue
+    // single line only (imported presets are untrusted - no ini-line injection),
+    // and a function replacement so "$&" in a value isn't expanded by replace()
+    const val = String(weapon[k]).replace(/[\r\n]/g, '')
     const re = new RegExp(`^${k}=.*$`, 'm')
-    if (re.test(raw)) raw = raw.replace(re, `${k}=${weapon[k]}`)
+    if (re.test(raw)) raw = raw.replace(re, () => `${k}=${val}`)
   }
   if (raw !== before) fs.writeFileSync(p.weapon, raw)
   return raw !== before
@@ -497,6 +523,7 @@ module.exports = {
   WEAPON_KEYS,
   PRIMARY_MANAGED,
   findInstall,
+  recentScenariosFromStats,
   readActive,
   readWeapon,
   readPrimary,

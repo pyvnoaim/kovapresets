@@ -1,12 +1,25 @@
 // Electron main process. Owns all filesystem/game access; the renderer talks to
 // it only through the IPC surface in preload.js. Core logic is in core/kovaaks.js.
-const { app, BrowserWindow, globalShortcut, ipcMain } = require('electron')
+const {
+  app,
+  BrowserWindow,
+  Menu,
+  Tray,
+  dialog,
+  globalShortcut,
+  ipcMain,
+  shell,
+} = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 const k = require('./core/kovaaks')
 const store = require('./core/presets')
 
+const STEAM_APP_ID = '824270' // KovaaK's
+
 let win = null
+let tray = null
+let quitting = false
 
 function createWindow() {
   win = new BrowserWindow({
@@ -15,7 +28,8 @@ function createWindow() {
     minWidth: 720,
     minHeight: 520,
     backgroundColor: '#111114',
-    title: 'KovaPreset',
+    title: 'KovaPresets',
+    icon: path.join(__dirname, 'assets', 'tray.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -24,6 +38,28 @@ function createWindow() {
   })
   win.removeMenu()
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'))
+  // Close hides to the tray so global hotkeys keep working; quit via the tray menu.
+  win.on('close', (e) => {
+    if (quitting) return
+    e.preventDefault()
+    win.hide()
+    const s = loadSettings()
+    if (!s.trayTipShown && tray) {
+      tray.displayBalloon({
+        title: 'KovaPresets is still running',
+        content: 'Hotkeys stay active. Right-click the tray icon to apply presets or quit.',
+      })
+      saveSettings({ ...s, trayTipShown: true })
+    }
+  })
+}
+
+function showWindow() {
+  if (!win || win.isDestroyed()) createWindow()
+  else {
+    win.show()
+    win.focus()
+  }
 }
 
 function requireInstall() {
@@ -34,6 +70,55 @@ function requireInstall() {
 
 const userData = () => app.getPath('userData')
 const pendingFile = () => path.join(userData(), 'pending.json')
+
+// ---- app settings (small flags, not presets) -----------------------------------
+const SETTINGS_DEFAULTS = { autoRestart: false, trayTipShown: false }
+const settingsFile = () => path.join(userData(), 'settings.json')
+function loadSettings() {
+  try {
+    return { ...SETTINGS_DEFAULTS, ...JSON.parse(fs.readFileSync(settingsFile(), 'utf8')) }
+  } catch {
+    return { ...SETTINGS_DEFAULTS }
+  }
+}
+function saveSettings(s) {
+  fs.writeFileSync(settingsFile(), JSON.stringify(s, null, 2))
+}
+
+// ---- scenario re-enter ----------------------------------------------------------
+// Relaunches the current scenario via the same steam:// jump-to-scenario deep
+// link the kova website's snipe button uses. Only a full scenario load re-reads
+// weaponsettings.ini - the in-game ResetSession bind just resets the timer
+// (verified: pressing it leaves the old crosshair), so keypressing is useless.
+// "Current scenario" = newest stats CSV, written every time a run ends.
+//
+// Jumping to the scenario the player is ALREADY IN doesn't reload it (verified
+// in-game), and that's the main case - so we park in the previous scenario
+// first, then jump back. The second jump is a real scenario change = full load.
+const REENTER_HOP_MS = 2500
+const scenarioLink = (name, challenge) =>
+  `steam://run/${STEAM_APP_ID}/?action=jump-to-scenario;name=${encodeURIComponent(name)}${challenge ? ';mode=challenge' : ''}`
+
+async function doRestartScenario() {
+  if (!k.isGameRunning()) return { ok: false, error: "KovaaK's isn't running." }
+  const install = k.findInstall()
+  const [scenario, parking] = install ? k.recentScenariosFromStats(install) : []
+  if (!scenario)
+    return { ok: false, error: 'No finished run found yet - re-enter the scenario by hand.' }
+  // mode=challenge on the final jump so the next run counts on the leaderboard.
+  // It also starts the run instantly - the URI API has no "challenge but idle"
+  // option, so the player presses their own reset bind when ready (a reset or
+  // abandoned run costs nothing, boards keep the best score).
+  if (parking) {
+    shell.openExternal(scenarioLink(parking, false))
+    setTimeout(() => shell.openExternal(scenarioLink(scenario, true)), REENTER_HOP_MS)
+  } else {
+    // only one scenario in the whole history: a direct jump reloads nothing if
+    // the player is already in it, but it's all we have
+    shell.openExternal(scenarioLink(scenario, true))
+  }
+  return { ok: true, scenario, hopped: !!parking }
+}
 
 // ---- pending (game-owned files queued while the game runs) --------------------
 function setPending(pending) {
@@ -67,6 +152,10 @@ function flushPendingIfPossible() {
   else if (pending.primary) k.applyPrimary(install, pending.primary)
   if (pending.palette != null) k.applyPalette(install, pending.palette)
   if (pending.ui != null) k.applyUi(install, pending.ui)
+  // re-assert the weapon intent the game's exit-write may have reverted
+  if (pending.weaponRaw != null)
+    fs.writeFileSync(path.join(install, 'Saved', 'SaveGames', 'weaponsettings.ini'), pending.weaponRaw)
+  else if (pending.weapon) k.applyWeapon(install, pending.weapon)
   clearPending()
   if (win && !win.isDestroyed()) win.webContents.send('changed')
   return true
@@ -135,24 +224,25 @@ function undoLastApply() {
   const palette = read('palette.bak')
   const ui = read('ui.bak')
   let queued = false
-  if (primaryRaw != null || palette != null || ui != null) {
-    if (running) {
-      // stash raw primary restore as a pending full-file write via parsed fields
-      const pending = readPending() || {}
-      if (primaryRaw != null) pending.primaryRaw = primaryRaw
-      if (palette != null) pending.palette = palette
-      if (ui != null) pending.ui = ui
-      setPending(pending)
-      queued = true
-    } else {
-      if (primaryRaw != null)
-        fs.writeFileSync(
-          path.join(install, 'Saved', 'SaveGames', 'PrimaryUserSettings.json'),
-          primaryRaw
-        )
-      if (palette != null) k.applyPalette(install, palette)
-      if (ui != null) k.applyUi(install, ui)
-    }
+  if (running) {
+    // stash restores the running game would clobber on exit; the quit flush
+    // writes them (weapon is restored live above, but re-asserted at quit too)
+    const pending = readPending() || {}
+    if (weapon != null) pending.weaponRaw = weapon
+    if (primaryRaw != null) pending.primaryRaw = primaryRaw
+    if (palette != null) pending.palette = palette
+    if (ui != null) pending.ui = ui
+    delete pending.weapon // raw restore supersedes a queued preset intent
+    setPending(pending)
+    queued = primaryRaw != null || palette != null || ui != null
+  } else if (primaryRaw != null || palette != null || ui != null) {
+    if (primaryRaw != null)
+      fs.writeFileSync(
+        path.join(install, 'Saved', 'SaveGames', 'PrimaryUserSettings.json'),
+        primaryRaw
+      )
+    if (palette != null) k.applyPalette(install, palette)
+    if (ui != null) k.applyUi(install, ui)
   }
   fs.rmSync(dir, { recursive: true, force: true }) // undo consumes the backup
   return { ok: true, queued }
@@ -164,6 +254,10 @@ function doApplyPreset(preset) {
   const running = k.isGameRunning()
   snapshotBeforeApply(install)
   const weaponChanged = k.applyWeapon(install, preset.weapon)
+  // The game rewrites weaponsettings.ini from memory on exit, so an apply it
+  // never re-read (no scenario re-entry) gets reverted at quit. Queue the
+  // intent; the quit flush re-asserts it.
+  if (running) setPending({ ...(readPending() || {}), weapon: preset.weapon })
 
   const active = k.readActive(install)
   let primaryWant = null
@@ -203,11 +297,16 @@ function registerHotkeys() {
   for (const preset of presets) {
     if (!preset.hotkey) continue
     try {
-      globalShortcut.register(preset.hotkey, () => {
+      globalShortcut.register(preset.hotkey, async () => {
         try {
           const result = doApplyPreset(preset)
+          // hotkey applies happen while playing, so the game already has focus -
+          // the auto re-enter is just a keypress away from being fully hands-off
+          let restarted = false
+          if (loadSettings().autoRestart && result.running && result.weaponChanged)
+            restarted = (await doRestartScenario()).ok
           if (win && !win.isDestroyed())
-            win.webContents.send('hotkey-applied', { name: preset.name, ...result })
+            win.webContents.send('hotkey-applied', { name: preset.name, ...result, restarted })
         } catch {
           // install missing mid-session - nothing sane to do from a hotkey
         }
@@ -249,17 +348,67 @@ function loadPresetsMigrated(install) {
   return presets
 }
 
+// ---- tray -----------------------------------------------------------------------
+// The menu is built fresh on every right-click (there's no "before show" hook on
+// Windows), so it always reflects the current preset list.
+function trayMenu() {
+  const presets = store.load(userData())
+  const items = presets.slice(0, 12).map((p) => ({
+    label: p.hotkey ? `${p.name}  (${p.hotkey})` : p.name,
+    click: async () => {
+      try {
+        const result = doApplyPreset(p)
+        let restarted = false
+        if (loadSettings().autoRestart && result.running && result.weaponChanged)
+          restarted = (await doRestartScenario()).ok
+        if (win && !win.isDestroyed())
+          win.webContents.send('hotkey-applied', { name: p.name, ...result, restarted })
+      } catch {
+        // install missing - the window surfaces this, a tray click can't
+      }
+    },
+  }))
+  return Menu.buildFromTemplate([
+    ...(items.length ? items : [{ label: 'No presets yet', enabled: false }]),
+    { type: 'separator' },
+    { label: 'Open KovaPresets', click: showWindow },
+    { label: 'Quit', click: () => app.quit() },
+  ])
+}
+
+function createTray() {
+  // the website's favicon (multi-frame .ico) - Windows picks the right size itself
+  tray = new Tray(path.join(__dirname, 'assets', 'tray.ico'))
+  tray.setToolTip('KovaPresets')
+  tray.on('click', showWindow)
+  tray.on('right-click', () => tray.popUpContextMenu(trayMenu()))
+}
+
 // ---- IPC ----------------------------------------------------------------------
 ipcMain.handle('state', () => {
   const install = k.findInstall()
   if (!install) return { install: null }
+  const active = k.readActive(install)
+  // Applies made while the game runs sit in pending.json until the game quits,
+  // so the files still hold the old values. Merge the queued intent into the
+  // reported state or the UI forgets what was applied (worst after an app
+  // restart, when nothing else hints at it).
+  const pending = readPending()
+  if (pending) {
+    if (pending.primary && active.primary)
+      for (const [section, fields] of Object.entries(pending.primary))
+        active.primary[section] = { ...(active.primary[section] || {}), ...fields }
+    if (pending.palette != null) active.palette = pending.palette
+    if (pending.ui != null) active.ui = pending.ui
+    if (pending.weapon) active.weapon = { ...active.weapon, ...pending.weapon }
+  }
   return {
     install,
     gameRunning: k.isGameRunning(),
-    active: k.readActive(install),
+    active,
     options: k.listOptions(install),
     presets: loadPresetsMigrated(install),
-    pending: !!readPending(),
+    pending: !!pending,
     resolution: k.readResolution(),
     canUndo: !!latestBackup(),
   }
@@ -367,6 +516,71 @@ ipcMain.handle('preset:apply', (_e, preset) => doApplyPreset(preset))
 
 ipcMain.handle('undo:last', () => undoLastApply())
 
+ipcMain.handle('game:restart', () => doRestartScenario())
+
+ipcMain.handle('game:launch', () => {
+  shell.openExternal(`steam://rungameid/${STEAM_APP_ID}`)
+  return { ok: true }
+})
+
+ipcMain.handle('settings:get', () => loadSettings())
+
+ipcMain.handle('settings:set', (_e, patch) => {
+  const s = { ...loadSettings(), ...patch }
+  saveSettings(s)
+  return s
+})
+
+// ---- preset import/export (share a preset as a JSON file) ----------------------
+ipcMain.handle('presets:export', async (_e, id) => {
+  const presets = store.load(userData())
+  const chosen = id ? presets.filter((p) => p.id === id) : presets
+  if (!chosen.length) return { ok: false, error: 'Nothing to export.' }
+  const base = id ? (chosen[0].name || 'preset').replace(/[<>:"/\\|?*]+/g, '').trim() : 'kova-presets'
+  const { canceled, filePath } = await dialog.showSaveDialog(win, {
+    defaultPath: `${base || 'preset'}.kovapreset.json`,
+    filters: [{ name: 'KovaPreset', extensions: ['json'] }],
+  })
+  if (canceled || !filePath) return { ok: false, canceled: true }
+  // ids are local, hotkeys are personal - neither belongs in a shared file
+  const out = chosen.map(({ id: _id, hotkey: _hk, ...rest }) => rest)
+  fs.writeFileSync(filePath, JSON.stringify({ kovapreset: 1, presets: out }, null, 2))
+  return { ok: true, count: out.length }
+})
+
+ipcMain.handle('presets:import', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    filters: [{ name: 'KovaPreset', extensions: ['json'] }],
+    properties: ['openFile'],
+  })
+  if (canceled || !filePaths.length) return { ok: false, canceled: true }
+  let data
+  try {
+    data = JSON.parse(fs.readFileSync(filePaths[0], 'utf8'))
+  } catch {
+    return { ok: false, error: "That file isn't valid JSON." }
+  }
+  const incoming = Array.isArray(data?.presets) ? data.presets : Array.isArray(data) ? data : null
+  if (!incoming) return { ok: false, error: "That file doesn't look like a KovaPreset export." }
+  const presets = store.load(userData())
+  let count = 0
+  for (const p of incoming) {
+    if (!p || typeof p !== 'object' || (!p.weapon && !p.primary)) continue
+    presets.push({
+      id: store.newId(),
+      name: String(p.name || 'Imported preset').slice(0, 80),
+      weapon: p.weapon && typeof p.weapon === 'object' ? p.weapon : {},
+      primary: p.primary && typeof p.primary === 'object' ? p.primary : {},
+      palette: typeof p.palette === 'string' ? p.palette : null,
+      ui: typeof p.ui === 'string' ? p.ui : null,
+    })
+    count++
+  }
+  if (!count) return { ok: false, error: 'No presets found in that file.' }
+  store.save(userData(), presets)
+  return { ok: true, count, presets }
+})
+
 ipcMain.handle('hud:save', (_e, uiRaw) => {
   const install = requireInstall()
   if (k.isGameRunning()) {
@@ -380,16 +594,19 @@ ipcMain.handle('hud:save', (_e, uiRaw) => {
 
 app.whenReady().then(() => {
   createWindow()
+  createTray()
   flushPendingIfPossible()
   registerHotkeys()
   setInterval(flushPendingIfPossible, 4000)
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
-  })
+  app.on('activate', showWindow)
+})
+
+app.on('before-quit', () => {
+  quitting = true
 })
 
 app.on('will-quit', () => globalShortcut.unregisterAll())
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
-})
+// Closing the window hides to the tray (hotkeys + queued flushes stay alive);
+// only the tray's Quit actually exits, so don't quit on window-all-closed.
+app.on('window-all-closed', () => {})

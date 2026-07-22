@@ -3,13 +3,13 @@
   <head>
     <meta charset="utf-8" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline';" />
-    <title>KovaPreset</title>
+    <title>KovaPresets</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <header class="topbar">
       <div class="brand">
-        <span>KovaPreset</span>
+        <span>KovaPresets.</span>
       </div>
       <div class="topbar-right">
         <div id="theme-seg" class="seg">
@@ -18,6 +18,7 @@
           <button data-theme="dark" title="Dark">Dark</button>
         </div>
         <span id="game-pill" class="pill pill-off">KovaaK's: checking…</span>
+        <button id="launch" class="ghost hidden" title="Launch KovaaK's via Steam">Launch</button>
         <button id="refresh" class="ghost" title="Re-scan install &amp; game state">↻</button>
       </div>
     </header>
@@ -34,7 +35,7 @@
           <div class="section-actions">
             <button id="undo" class="hidden" title="Restore the files from before the last apply">Undo last apply</button>
             <button id="open-hud">HUD editor</button>
-            <button id="capture" class="primary">Capture as preset</button>
+            <button id="capture">Capture as preset</button>
           </div>
         </div>
         <div id="active" class="active-grid"></div>
@@ -43,6 +44,7 @@
           <h2>Presets</h2>
           <div class="section-actions">
             <span id="preset-count" class="muted"></span>
+            <button id="import" title="Import presets from a shared file">Import</button>
             <button id="toggle-builder">New preset</button>
           </div>
         </div>
@@ -93,6 +95,13 @@
         </div>
         <div id="presets" class="presets"></div>
         <p id="empty" class="muted hidden">No presets yet. Set up KovaaK's how you like, then hit <b>Capture as preset</b>.</p>
+        <div class="settings-row">
+          <label class="check">
+            <input id="auto-restart" type="checkbox" />
+            Auto re-enter the scenario after a hotkey apply
+          </label>
+          <span id="restart-key-note" class="muted"></span>
+        </div>
       </section>
       <section id="hud-view" class="hidden">
         <div class="section-head">
@@ -130,7 +139,7 @@
           <button data-align="distv">Vertically</button>
         </div>
         <p class="muted hud-note">
-          Drag windows to reposition — they snap to screen center, edges, other windows, and
+          Drag windows to reposition - they snap to screen center, edges, other windows, and
           equal spacing. Shift-click to multi-select for align/distribute. Arrow keys nudge 1px
           (Shift = 10px). Drag the corner handle of a selected window to calibrate its real size.
           Layout applies when KovaaK's is closed, or queues for its next quit.

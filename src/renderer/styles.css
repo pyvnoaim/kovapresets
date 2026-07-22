@@ -48,6 +48,7 @@
   --danger: #dc2626;
   --success: #16a34a;
   --warning: #d97706;
+  --tile-bg: #e9e9ee; /* crosshair preview backdrop */
   color-scheme: light;
 }
 
@@ -75,6 +76,7 @@
     --danger: #f87171;
     --success: #4ade80;
     --warning: #fbbf24;
+    --tile-bg: #212126;
     color-scheme: dark;
   }
 }
@@ -94,6 +96,7 @@
   --danger: #f87171;
   --success: #4ade80;
   --warning: #fbbf24;
+  --tile-bg: #212126;
   color-scheme: dark;
 }
 
@@ -111,6 +114,9 @@ body {
   font: 14px/1.5 'Space Grotesk', system-ui, sans-serif;
   -webkit-user-select: none;
   user-select: none;
+  /* hidden [data-tip] bubbles are laid out even at opacity 0 - a wide tip near
+     the window edge must never conjure a horizontal scrollbar */
+  overflow-x: clip;
 }
 
 .hidden {
@@ -144,9 +150,12 @@ body {
   gap: 10px;
 }
 
-/* Navbar controls share one height so they line up. */
+/* Navbar controls share one height and the ghost-button chrome (transparent
+   bg, standard border, control radius) so they read as one family with the
+   Launch button. */
 .seg,
 #game-pill,
+#launch,
 #refresh {
   height: 32px;
 }
@@ -155,9 +164,9 @@ body {
 .seg {
   display: inline-flex;
   align-items: center;
-  background: var(--surface-raised);
+  background: transparent;
   border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-control);
   padding: 2px;
 }
 .seg button {
@@ -166,7 +175,7 @@ body {
   color: var(--fg-muted);
   padding: 0 12px;
   height: 100%;
-  border-radius: var(--radius-pill);
+  border-radius: calc(var(--radius-control) - 3px);
   font-size: 12px;
   line-height: 1;
 }
@@ -174,7 +183,7 @@ body {
   color: var(--fg);
 }
 .seg button.on {
-  background: var(--surface);
+  background: var(--surface-raised);
   color: var(--fg);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
 }
@@ -183,8 +192,8 @@ body {
   display: inline-flex;
   align-items: center;
   font-size: 12px;
-  padding: 0 12px;
-  border-radius: var(--radius-pill);
+  padding: 0 10px;
+  border-radius: var(--radius-control);
   border: 1px solid var(--border);
   font-family: 'JetBrains Mono', monospace;
 }
@@ -235,6 +244,20 @@ button {
 button:hover {
   border-color: var(--border-strong);
 }
+/* A mouse click shouldn't leave the OS-colored focus ring behind; keep a
+   themed ring for keyboard navigation only. */
+button:focus:not(:focus-visible) {
+  outline: none;
+}
+button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: 1px;
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
 button:active {
   transform: translateY(1px);
 }
@@ -258,7 +281,6 @@ button.ghost {
   justify-content: center;
   width: 32px;
   padding: 0;
-  border-radius: var(--radius-pill);
 }
 button.danger:hover {
   border-color: var(--danger);
@@ -299,6 +321,15 @@ button.danger:hover {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+/* Section-head buttons match the navbar/Launch scale: 32px, ghost chrome.
+   .primary keeps its accent fill, just at the compact size. */
+.section-actions button {
+  height: 32px;
+  padding: 0 10px;
+}
+.section-actions button:not(.primary) {
+  background: transparent;
 }
 
 /* preset builder */
@@ -386,7 +417,7 @@ button.danger:hover {
   width: 20px;
   height: 20px;
   object-fit: contain;
-  background: #26262a;
+  background: var(--tile-bg);
   border-radius: 3px;
   flex-shrink: 0;
 }
@@ -481,7 +512,7 @@ button.danger:hover {
   width: 44px;
   height: 44px;
   border-radius: var(--radius-control);
-  background: #212126;
+  background: var(--tile-bg);
   border: 1px solid var(--border);
   display: block;
 }
@@ -600,7 +631,8 @@ button.play svg {
   width: 14px;
   height: 14px;
 }
-.preset .dup:hover {
+.preset .dup:hover,
+.preset .exp:hover {
   color: var(--fg);
   border-color: var(--border);
 }
@@ -972,6 +1004,43 @@ button.play svg {
 }
 .toast b {
   color: var(--warning);
+}
+.toast-action {
+  margin-left: 12px;
+  padding: 4px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+  vertical-align: middle;
+}
+.toast-action:hover {
+  filter: brightness(1.05);
+}
+
+/* settings row under the preset list */
+.settings-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.check input {
+  accent-color: var(--accent);
+}
+.settings-row .muted {
+  font-size: 12px;
 }
 @keyframes rise {
   from {
