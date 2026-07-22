@@ -3,7 +3,7 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('kova', {
-  state: () => ipcRenderer.invoke('state'),
+  state: (opts) => ipcRenderer.invoke('state', opts),
   capture: (name) => ipcRenderer.invoke('presets:capture', name),
   build: (picks) => ipcRenderer.invoke('presets:build', picks),
   remove: (id) => ipcRenderer.invoke('presets:delete', id),
