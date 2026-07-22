@@ -324,6 +324,20 @@ function showHelp() {
   wrap.querySelector('.m-ok').focus()
 }
 
+// An update downloads silently in the background; this is the only thing the
+// user ever sees about it. Shown once per staged version, and left up far
+// longer than a normal toast - restarting is the user's call, not urgent.
+let updateOfferedFor = null
+function maybeOfferUpdate() {
+  const v = current?.updateReady
+  if (!v || updateOfferedFor === v) return
+  updateOfferedFor = v
+  toast(`Version ${esc(v)} is ready to install.`, 'ok', 60000, {
+    label: 'Restart now',
+    run: () => window.kova.installUpdate(),
+  })
+}
+
 // action = { label, run }: renders a button inside the toast (e.g. "Re-enter now")
 function toast(msg, kind = '', ms = 3600, action = null) {
   const el = $('#toast')
@@ -749,6 +763,7 @@ async function refresh(rescan) {
   if (dragReordering) return
   if (cpick.isOpen()) return // a re-render would tear out the popover's anchor
   current = await window.kova.state(rescan ? { rescan: true } : undefined)
+  maybeOfferUpdate()
   const pill = $('#game-pill')
   if (!current.install) {
     $('#not-found').classList.remove('hidden')

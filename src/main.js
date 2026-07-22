@@ -457,6 +457,7 @@ ipcMain.handle('state', (_e, opts) => {
     // rewrites PrimaryUserSettings.json from launch-time memory and its theme
     // fields go stale the moment a preset is applied live.
     proxyPrimary: k.readProxyPrimary(install),
+    updateReady,
     options: listOptionsCached(install, opts?.rescan),
     presets: loadPresetsMigrated(install),
     pending: !!pending,
@@ -721,9 +722,45 @@ ipcMain.handle('hud:save', (_e, uiRaw) => {
   return { status: 'applied' }
 })
 
+// ---- auto-update ---------------------------------------------------------------
+// Releases live on this repo's GitHub Releases; electron-updater reads the
+// published latest.yml, downloads in the background and verifies the installer
+// against its sha512 before offering it. Only a packaged build carries the
+// update metadata, so a dev run skips all of it.
+const UPDATE_POLL_MS = 6 * 60 * 60 * 1000 // the app can sit in the tray for days
+let updateReady = null // version string once an update is downloaded and staged
+
+function initAutoUpdate() {
+  if (!app.isPackaged) return
+  const { autoUpdater } = require('electron-updater')
+  autoUpdater.autoDownload = true
+  // if the user never clicks "restart now", the staged update still installs
+  // the next time they quit from the tray
+  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.on('update-downloaded', (info) => {
+    updateReady = info.version
+  })
+  // offline, rate-limited, or no release yet - just try again on the next tick
+  autoUpdater.on('error', () => {})
+  const check = () => autoUpdater.checkForUpdates().catch(() => {})
+  check()
+  setInterval(check, UPDATE_POLL_MS)
+}
+
+// The renderer polls state every few seconds, so the staged-update flag rides
+// along there instead of a push event - it can't be missed by a window that
+// was hidden (--hidden startup) or reloaded when the event fired.
+ipcMain.handle('update:install', () => {
+  if (!updateReady) return { ok: false }
+  quitting = true // the window's close handler otherwise just hides to the tray
+  require('electron-updater').autoUpdater.quitAndInstall()
+  return { ok: true }
+})
+
 app.whenReady().then(() => {
   createWindow()
   createTray()
+  initAutoUpdate()
   flushPendingIfPossible()
   registerHotkeys()
   setInterval(flushPendingIfPossible, 4000)

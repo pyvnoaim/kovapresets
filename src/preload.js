@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('kova', {
   apply: (preset) => ipcRenderer.invoke('preset:apply', preset),
   deactivate: () => ipcRenderer.invoke('presets:deactivate'),
   updatePreset: (id, picks) => ipcRenderer.invoke('presets:update', id, picks),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
   winMinimize: () => ipcRenderer.invoke('win:minimize'),
   toggleDevtools: () => ipcRenderer.invoke('win:devtools'),
   winClose: () => ipcRenderer.invoke('win:close'),
