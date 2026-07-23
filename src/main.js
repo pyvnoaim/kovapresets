@@ -91,6 +91,18 @@ function createWindow() {
     },
   })
   win.removeMenu()
+  // The preload bridge is attached to the WINDOW, not the page, so anything
+  // that loads here inherits it. The app has no in-app links or popups, so
+  // pinning the window to index.html costs nothing and means one escaping slip
+  // in a game-supplied string (crosshair/theme/scenario names) can't reach it.
+  // External links go through shell.openExternal, which these don't affect.
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  // Same-URL navigation is Ctrl+R/F5 (the renderer calls location.reload(),
+  // which is renderer-initiated and does reach this event) - anything else is
+  // the page trying to leave index.html, which nothing here legitimately does.
+  win.webContents.on('will-navigate', (e, url) => {
+    if (url !== win.webContents.getURL()) e.preventDefault()
+  })
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'))
   // Close hides to the tray so global hotkeys keep working; quit via the tray menu.
   win.on('close', (e) => {
@@ -191,7 +203,19 @@ function clearPending() {
   } catch {}
 }
 
+// Runs on a bare 4s interval, so it must never throw: applyWeapon/applyPrimary
+// read the settings files unguarded, and a Steam "verify files" or a moved
+// library makes them vanish mid-session. Swallow and retry next tick - pending
+// stays on disk, so nothing is lost.
 function flushPendingIfPossible() {
+  try {
+    return flushPending()
+  } catch {
+    return false
+  }
+}
+
+function flushPending() {
   const pending = readPending()
   if (!pending) return false
   if (gameRunning()) return false
@@ -294,10 +318,6 @@ function doApplyPreset(preset) {
   const running = gameRunning()
   captureBaselineIfMissing(install)
   const weaponChanged = k.applyWeapon(install, preset.weapon)
-  // The game rewrites weaponsettings.ini from memory on exit, so an apply it
-  // never re-read (no scenario re-entry) gets reverted at quit. Queue the
-  // intent; the quit flush re-asserts it.
-  if (running) setPending({ ...(readPending() || {}), weapon: preset.weapon })
 
   const active = k.readActive(install)
   let primaryWant = null
@@ -314,18 +334,33 @@ function doApplyPreset(preset) {
   }
 
   let theme = 'nochange'
-  if (wants.primary || wants.palette != null || wants.ui != null) {
-    if (running) {
-      const pending = readPending() || {}
-      setPending({ ...pending, ...wants })
-      theme = wants.primary ? (k.proxyThemeSelected(install) ? 'live' : 'arming') : 'queued'
-    } else {
-      if (wants.primary) k.applyPrimary(install, wants.primary)
-      if (wants.palette != null) k.applyPalette(install, wants.palette)
-      if (wants.ui != null) k.applyUi(install, wants.ui)
-      clearPending()
-      theme = 'applied'
-    }
+  if (running) {
+    // The game rewrites weaponsettings.ini from memory on exit, so an apply it
+    // never re-read (no scenario re-entry) gets reverted at quit. Queue the
+    // intent; the quit flush re-asserts it.
+    //
+    // REPLACE the queue, don't merge into it: a preset is a total intent, and a
+    // field this preset leaves alone (wants.X null because the disk already
+    // matches) would otherwise keep the PREVIOUS preset's queued value and land
+    // that on game quit - e.g. apply a dark preset, then a light one whose theme
+    // equals the on-disk one, and the dark theme still applies at quit.
+    //
+    // The exception is a field the preset carries NOTHING for: it has no
+    // opinion, so whatever else queued it stands - e.g. a HUD layout saved from
+    // the editor mid-session, then a preset with no `ui` applied on top.
+    const prev = readPending() || {}
+    const next = { weapon: preset.weapon, ...wants }
+    if (preset.palette == null && prev.palette != null) next.palette = prev.palette
+    if (preset.ui == null && prev.ui != null) next.ui = prev.ui
+    setPending(next)
+    if (wants.primary) theme = k.proxyThemeSelected(install) ? 'live' : 'arming'
+    else if (wants.palette != null || wants.ui != null) theme = 'queued'
+  } else if (wants.primary || wants.palette != null || wants.ui != null) {
+    if (wants.primary) k.applyPrimary(install, wants.primary)
+    if (wants.palette != null) k.applyPalette(install, wants.palette)
+    if (wants.ui != null) k.applyUi(install, wants.ui)
+    clearPending()
+    theme = 'applied'
   }
   return { weaponChanged, theme, running }
 }
@@ -339,14 +374,20 @@ function registerHotkeys() {
     try {
       globalShortcut.register(preset.hotkey, async () => {
         try {
-          const result = doApplyPreset(preset)
+          // Re-read by id instead of closing over the loaded object: only
+          // delete/setHotkey re-register, so editing a preset (build/update/
+          // updateWeapon/rename) would otherwise leave the hotkey applying the
+          // preset as it looked when hotkeys were last registered.
+          const fresh = store.load(userData()).find((x) => x.id === preset.id)
+          if (!fresh) return
+          const result = doApplyPreset(fresh)
           // hotkey applies happen while playing, so the game already has focus -
           // the auto re-enter is just a keypress away from being fully hands-off
           let restarted = false
           if (loadSettings().autoRestart && result.running && result.weaponChanged)
             restarted = (await doRestartScenario()).ok
           if (win && !win.isDestroyed())
-            win.webContents.send('hotkey-applied', { name: preset.name, ...result, restarted })
+            win.webContents.send('hotkey-applied', { name: fresh.name, ...result, restarted })
         } catch {
           // install missing mid-session - nothing sane to do from a hotkey
         }
@@ -489,6 +530,7 @@ ipcMain.handle('presets:build', (_e, picks) => {
   const { active } = readActiveMerged(install)
   const weapon = { ...active.weapon }
   if (picks.crosshair) weapon.CrosshairFile = picks.crosshair
+  if (picks.crosshairScale > 0) weapon.CrosshairScale = String(picks.crosshairScale)
   if (picks.crosshairColor) weapon.CrosshairColor = picks.crosshairColor
   if (picks.bodyHit != null) weapon.BodyHitSound = picks.bodyHit
   const sens = Number(picks.sens)
@@ -544,6 +586,7 @@ ipcMain.handle('presets:update', (_e, id, picks) => {
   if (picks.name) p.name = String(picks.name).slice(0, 80)
   p.weapon = p.weapon || {}
   if (picks.crosshair) p.weapon.CrosshairFile = picks.crosshair
+  if (picks.crosshairScale > 0) p.weapon.CrosshairScale = String(picks.crosshairScale)
   if (picks.crosshairColor) p.weapon.CrosshairColor = picks.crosshairColor
   if (picks.bodyHit != null) p.weapon.BodyHitSound = picks.bodyHit
   const sens = Number(picks.sens)
@@ -631,7 +674,14 @@ ipcMain.handle('presets:setHotkey', (_e, id, hotkey) => {
   return presets
 })
 
-ipcMain.handle('preset:apply', (_e, preset) => doApplyPreset(preset))
+// By id, not by object: what gets written to the game's files is whatever the
+// store holds, so the renderer can't define it. Same lookup the hotkey path
+// does, so both apply exactly the same thing.
+ipcMain.handle('preset:apply', (_e, id) => {
+  const preset = store.load(userData()).find((p) => p.id === id)
+  if (!preset) throw new Error('That preset no longer exists.')
+  return doApplyPreset(preset)
+})
 
 ipcMain.handle('presets:deactivate', () => deactivatePresets())
 
@@ -701,8 +751,8 @@ ipcMain.handle('presets:import', async () => {
       name: String(p.name || 'Imported preset').slice(0, 80),
       weapon: p.weapon && typeof p.weapon === 'object' ? p.weapon : {},
       primary: p.primary && typeof p.primary === 'object' ? p.primary : {},
-      palette: typeof p.palette === 'string' ? p.palette : null,
-      ui: typeof p.ui === 'string' ? p.ui : null,
+      palette: store.validPalette(p.palette) ? p.palette : null,
+      ui: store.validUi(p.ui) ? p.ui : null,
     })
     count++
   }
@@ -713,6 +763,10 @@ ipcMain.handle('presets:import', async () => {
 
 ipcMain.handle('hud:save', (_e, uiRaw) => {
   const install = requireInstall()
+  // hudSerialize() always produces valid JSON, so this only ever fires on a
+  // renderer bug - but a corrupt UI.json breaks the player's in-game HUD, and
+  // that's not worth trusting a caller for.
+  if (!store.validUi(uiRaw)) return { status: 'invalid' }
   if (gameRunning()) {
     const pending = readPending() || {}
     setPending({ ...pending, ui: uiRaw })

@@ -12,7 +12,7 @@ contextBridge.exposeInMainWorld('kova', {
   duplicate: (id) => ipcRenderer.invoke('presets:duplicate', id),
   reorder: (orderedIds) => ipcRenderer.invoke('presets:reorder', orderedIds),
   setHotkey: (id, hotkey) => ipcRenderer.invoke('presets:setHotkey', id, hotkey),
-  apply: (preset) => ipcRenderer.invoke('preset:apply', preset),
+  apply: (id) => ipcRenderer.invoke('preset:apply', id),
   deactivate: () => ipcRenderer.invoke('presets:deactivate'),
   updatePreset: (id, picks) => ipcRenderer.invoke('presets:update', id, picks),
   installUpdate: () => ipcRenderer.invoke('update:install'),
