@@ -528,6 +528,36 @@ button.danger:hover {
   font-family: 'JetBrains Mono', monospace;
   font-size: 12px;
 }
+/* crosshair size: live preview + slider */
+.size-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.b-xprev {
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+  border-radius: var(--radius-control);
+  background: var(--tile-bg);
+  border: 1px solid var(--border);
+  display: block;
+}
+.size-ctl {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+}
+.size-ctl input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+.size-ctl .muted {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+}
 .builder-note {
   font-size: 12px;
   margin-top: 12px;

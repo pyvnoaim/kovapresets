@@ -16,7 +16,9 @@ window.addEventListener('keydown', async (e) => {
       !(await appConfirm('Reload and discard your HUD changes?', { okLabel: 'Reload', danger: true }))
     )
       return
-    location.reload()
+    // via main (webContents.reload()) not location.reload(): the latter is a
+    // renderer navigation the main-process will-navigate guard can wrongly block
+    window.kova.reload()
   }
   if (e.key === 'F12') window.kova.toggleDevtools()
 })
@@ -226,31 +228,52 @@ function playSound(name) {
 // with the color, keeping the original alpha. Decoded images are cached so
 // re-renders don't hit the disk again for the same PNG.
 const xhairImgCache = new Map() // url -> Image
-function drawCrosshair(canvas, file, colorCC) {
+// Decode a crosshair PNG once (cached) and hand it to cb, now or on load.
+function withCrosshairImg(file, cb) {
   const url = crosshairUrl(file)
   if (!url) return
-  const paint = (img) => {
-    const ctx = canvas.getContext('2d')
-    const s = Math.min(canvas.width / img.width, canvas.height / img.height, 1)
-    const w = img.width * s
-    const h = img.height * s
-    ctx.clearRect(0, 0, canvas.width, canvas.height)
-    ctx.drawImage(img, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h)
-    ctx.globalCompositeOperation = 'multiply'
-    ctx.fillStyle = colorToHex(colorCC)
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
-    ctx.globalCompositeOperation = 'destination-in'
-    ctx.drawImage(img, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h)
-    ctx.globalCompositeOperation = 'source-over'
-  }
   let img = xhairImgCache.get(url)
-  if (img && img.complete && img.naturalWidth) return paint(img)
+  if (img && img.complete && img.naturalWidth) return cb(img)
   if (!img) {
     img = new Image()
     xhairImgCache.set(url, img)
     img.src = url
   }
-  img.addEventListener('load', () => paint(img), { once: true })
+  img.addEventListener('load', () => cb(img), { once: true })
+}
+// Paint img into canvas at w×h, centered, tinted `hex` the way the game tints
+// it: multiply the pixels with the color, keeping the original alpha.
+function paintCrosshairImg(canvas, img, hex, w, h) {
+  const ctx = canvas.getContext('2d')
+  const x = (canvas.width - w) / 2
+  const y = (canvas.height - h) / 2
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  ctx.drawImage(img, x, y, w, h)
+  ctx.globalCompositeOperation = 'multiply'
+  ctx.fillStyle = hex
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+  ctx.globalCompositeOperation = 'destination-in'
+  ctx.drawImage(img, x, y, w, h)
+  ctx.globalCompositeOperation = 'source-over'
+}
+// Row/list preview: fit-to-tile, ignores CrosshairScale (the tiles are tiny).
+function drawCrosshair(canvas, file, colorCC) {
+  withCrosshairImg(file, (img) => {
+    const s = Math.min(canvas.width / img.width, canvas.height / img.height, 1)
+    paintCrosshairImg(canvas, img, colorToHex(colorCC), img.width * s, img.height * s)
+  })
+}
+// Builder preview: renders at a fixed reference size for scale 1 so every
+// crosshair reads the same at 1×, then multiplies by `scale` (clamped so a big
+// scale can't overflow the canvas). Takes a hex directly - the builder holds the
+// picked colour as hex, not the game's X=/Y=/Z= form.
+function drawCrosshairScaled(canvas, file, hex, scale = 1) {
+  withCrosshairImg(file, (img) => {
+    const ref = Math.min(canvas.width, canvas.height) * 0.4 // scale-1 target (largest side)
+    const base = ref / Math.max(img.width, img.height)
+    const s = Math.min(base * scale, canvas.width / img.width, canvas.height / img.height)
+    paintCrosshairImg(canvas, img, hex, img.width * s, img.height * s)
+  })
 }
 
 // ---- custom confirm (replaces the native OS confirm popup) ---------------------
@@ -851,11 +874,15 @@ function makeCombo(input, getList, renderItem) {
     render()
   }
   const close = () => list.classList.add('hidden')
+  // `change` (not `input`) on select, so listeners can react without the combo's
+  // own `input`→open handler re-opening the list on every pick.
+  const commit = (val) => {
+    input.value = val
+    close()
+    input.dispatchEvent(new Event('change'))
+  }
   const pickFocused = () => {
-    if (idx >= 0 && filtered[idx] != null) {
-      input.value = filtered[idx]
-      close()
-    }
+    if (idx >= 0 && filtered[idx] != null) commit(filtered[idx])
   }
 
   input.addEventListener('focus', open)
@@ -884,8 +911,7 @@ function makeCombo(input, getList, renderItem) {
   list.addEventListener('mousedown', (e) => {
     const item = e.target.closest('.combo-item')
     if (item) {
-      input.value = item.dataset.v
-      close()
+      commit(item.dataset.v)
       e.preventDefault()
     }
   })
@@ -905,17 +931,33 @@ makeCombo($('#b-killsound'), () => current?.options?.sounds || [])
 // edit mode (placeholders show the PRESET's values, empty keeps them).
 let editingPresetId = null
 let builderColorTouched = false // edit mode: only send a color the user picked
+let builderSizeTouched = false // slider always has a value; untouched = keep current
+let builderSrc = null // the preset (edit) or active setup (create) the builder previews
+
+// Redraw the builder crosshair preview from the current field state: the typed
+// crosshair (or the src's, if none), the picked colour, and the slider scale.
+function updateBuilderPreview() {
+  if (!builderSrc) return
+  const typed = $('#b-crosshair').value.trim()
+  const file = current?.options?.crosshairs?.includes(typed) ? typed : crosshair(builderSrc)
+  drawCrosshairScaled(
+    $('#b-xprev'),
+    file,
+    $('#b-color').dataset.value || '#ffffff',
+    Number($('#b-size').value) || 1
+  )
+}
 
 function populateBuilder(preset) {
   if (!current?.options) return
   editingPresetId = preset ? preset.id : null
   const src = preset || current.active
+  builderSrc = src
   const themeLabel = preset
     ? themeName(preset)
     : activeThemeLabel(current.active, current.presets).name
   $('#b-theme').placeholder = `keep current (${themeLabel || 'none'})`
   $('#b-crosshair').placeholder = `keep current (${noExt(crosshair(src)) || 'none'})`
-  $('#b-size').placeholder = `keep current (${parseFloat(src.weapon?.CrosshairScale) || 1})`
   $('#b-sound').placeholder = `keep current (${bodyHit(src) || 'none'})`
   const curSens = sensOf(src)
   $('#b-sens').placeholder =
@@ -931,9 +973,14 @@ function populateBuilder(preset) {
   $('#b-sens').value = ''
   $('#b-dpi').value = ''
   $('#b-crosshair').value = ''
-  $('#b-size').value = ''
   $('#b-sound').value = ''
   $('#b-killsound').value = ''
+  // slider sits at the current scale so the preview is accurate, but stays
+  // "keep current" until the user drags it (same as the colour field)
+  builderSizeTouched = false
+  $('#b-size').value = parseFloat(src.weapon?.CrosshairScale) || 1
+  $('#b-size-val').textContent = 'keep current'
+  updateBuilderPreview()
   $('#b-create').textContent = preset ? 'Save changes' : 'Create preset'
   $('#b-note').textContent = preset
     ? 'Empty fields keep the preset as it is. Palette and HUD layout stay untouched.'
@@ -962,8 +1009,19 @@ $('#b-color').addEventListener('click', () => {
     btn.dataset.value = hexVal
     btn.firstElementChild.style.background = hexVal
     $('#b-color-hex').textContent = hexVal
+    updateBuilderPreview()
   })
 })
+// crosshair size slider: dragging it opts into an explicit size (untouched keeps
+// current), updates the readout, and redraws the preview live
+$('#b-size').addEventListener('input', () => {
+  builderSizeTouched = true
+  $('#b-size-val').textContent = `${Number($('#b-size').value).toFixed(2)}×`
+  updateBuilderPreview()
+})
+// preview follows the chosen crosshair - `change` fires on combo pick, `input` on typing
+$('#b-crosshair').addEventListener('change', updateBuilderPreview)
+$('#b-crosshair').addEventListener('input', updateBuilderPreview)
 $('#b-create').addEventListener('click', async () => {
   const opts = current?.options
   // a typed value must exactly match an installed option (empty = keep current)
@@ -989,7 +1047,8 @@ $('#b-create').addEventListener('click', async () => {
         (editingPresetId ? null : `Preset ${(current?.presets?.length || 0) + 1}`),
       theme: pick('#b-theme', opts.themes, 'theme'),
       crosshair: pick('#b-crosshair', opts.crosshairs, 'crosshair'),
-      crosshairScale: numPick('#b-size', 'crosshair size', false),
+      // slider always has a value; only send it if the user actually dragged it
+      crosshairScale: builderSizeTouched ? Number($('#b-size').value) : null,
       // edit mode: an untouched picker sends nothing, so a preset with no
       // color of its own doesn't silently gain the seeded white
       crosshairColor:
