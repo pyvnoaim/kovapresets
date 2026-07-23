@@ -537,6 +537,121 @@ function readResolution() {
   return { x: x ? parseInt(x[1], 10) : 1920, y: y ? parseInt(y[1], 10) : 1080 }
 }
 
+// ---- health check -------------------------------------------------------------
+// Surfaces the silent failure modes: a moved or uninstalled game (findInstall
+// goes null mid-session), settings files the app can't write (a read-only folder,
+// or KovaaK's reinstalled somewhere it can't touch), a missing/corrupt
+// PrimaryUserSettings the theme/DPI writes parse, and live-theme swapping not yet
+// armed in-game. Each check is independent and never throws; the overall status
+// is the worst single check. probeWrites: actually write+delete a temp file to
+// test a folder (reliable on Windows, where accessSync(W_OK) lies about ACLs) -
+// the real app does; selftest passes false to stay strictly read-only.
+function canWriteDir(dir, probeWrites) {
+  try {
+    if (!fs.existsSync(dir)) return false
+    if (!probeWrites) {
+      fs.accessSync(dir, fs.constants.W_OK)
+      return true
+    }
+    const probe = path.join(dir, '.kovapresets-writetest.tmp')
+    fs.writeFileSync(probe, '')
+    fs.unlinkSync(probe)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function checkHealth(install, { probeWrites = true } = {}) {
+  const checks = []
+  const add = (id, label, status, detail) => checks.push({ id, label, status, detail })
+
+  if (!install) {
+    const libs = libraryPaths()
+    add(
+      'install',
+      "KovaaK's install",
+      'fail',
+      libs.length
+        ? `No FPSAimTrainer found via Steam. Searched: ${libs.join('; ')}.`
+        : 'No Steam install detected on this PC. Is Steam installed?'
+    )
+    return { status: 'fail', checks }
+  }
+  add('install', "KovaaK's install", 'ok', install)
+
+  const p = paths(install)
+  const sg = path.join(install, 'Saved', 'SaveGames')
+
+  const sgOk = canWriteDir(sg, probeWrites)
+  add(
+    'savegames',
+    'Settings folder writable',
+    sgOk ? 'ok' : 'fail',
+    sgOk
+      ? sg
+      : `Can't write to ${sg}. Make sure the folder isn't read-only - applies would silently do nothing.`
+  )
+
+  const weaponOk = fs.existsSync(p.weapon)
+  add(
+    'weapon',
+    'weaponsettings.ini present',
+    weaponOk ? 'ok' : 'fail',
+    weaponOk
+      ? 'Crosshair, combat sounds and scenario sens write here.'
+      : "Missing. Launch KovaaK's once so it writes its settings files."
+  )
+
+  let primaryStatus = 'ok'
+  let primaryDetail = 'Theme, event sounds and DPI write here.'
+  if (!fs.existsSync(p.primary)) {
+    primaryStatus = 'fail'
+    primaryDetail = "Missing. Launch KovaaK's once so it writes its settings files."
+  } else if (readPrimaryObject(install) == null) {
+    primaryStatus = 'fail'
+    primaryDetail = 'Unreadable JSON - theme and DPI applies would fail against it.'
+  }
+  add('primary', 'PrimaryUserSettings.json valid', primaryStatus, primaryDetail)
+
+  const themesOk = canWriteDir(p.themes, probeWrites)
+  add(
+    'themes',
+    'Themes folder writable',
+    themesOk ? 'ok' : 'warn',
+    themesOk
+      ? `The ${PROXY_THEME} proxy theme is written here for live theme swaps.`
+      : `Can't write to ${p.themes}. Live theme swapping won't work until it is.`
+  )
+
+  const proxyFile = path.join(p.themes, `${PROXY_THEME}.json`)
+  if (proxyThemeSelected(install))
+    add(
+      'proxy',
+      'Live theme swapping',
+      'ok',
+      `The ${PROXY_THEME} theme is selected in-game - theme presets apply live.`
+    )
+  else if (fs.existsSync(proxyFile))
+    add(
+      'proxy',
+      'Live theme swapping',
+      'warn',
+      `Select the ${PROXY_THEME} theme in KovaaK's settings once so theme presets swap live.`
+    )
+  else
+    add(
+      'proxy',
+      'Live theme swapping',
+      'warn',
+      "Not set up yet - it arms the first time you apply a theme preset (or from the first-run setup)."
+    )
+
+  const rank = { ok: 0, warn: 1, fail: 2 }
+  const status = checks.reduce((worst, c) => (rank[c.status] > rank[worst] ? c.status : worst), 'ok')
+  return { status, checks }
+}
+
 // ---- game process -------------------------------------------------------------
 function isGameRunning() {
   try {
@@ -553,6 +668,8 @@ module.exports = {
   WEAPON_KEYS,
   PRIMARY_MANAGED,
   findInstall,
+  libraryPaths,
+  checkHealth,
   recentScenariosFromStats,
   readActive,
   readWeapon,

@@ -3,6 +3,7 @@
 const $ = (sel) => document.querySelector(sel)
 let current = null // last state snapshot
 let dragReordering = false // true while a preset row is being dragged
+let onboarded = false // gates the health auto-open until first-run is settled
 
 // win.removeMenu() + frameless killed Electron's built-in accelerators, so
 // reload/devtools have to be restored by hand
@@ -58,7 +59,11 @@ const ICON = {
   key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>',
   share:
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m8 7 4-4 4 4"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>',
+  warn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.5 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.5a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>',
+  cross:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
 }
+const STATUS_ICON = { ok: ICON.check, warn: ICON.warn, fail: ICON.cross }
 
 // KovaaK's stores crosshair color as "X=r Y=g Z=b" (0-1). Convert to/from #hex
 // for a native <input type=color>.
@@ -345,6 +350,214 @@ function showHelp() {
   document.addEventListener('keydown', onKey, true)
   document.body.appendChild(wrap)
   wrap.querySelector('.m-ok').focus()
+}
+
+// ---- health check ---------------------------------------------------------------
+// Diagnostics for the silent failures: game path moved/uninstalled, settings
+// files not writable, PrimaryUserSettings missing/corrupt, live-theme not armed.
+// The heart button in the topbar reflects the last result; a fail auto-opens the
+// panel (once, and never over the first-run wizard - it owns that path).
+let healthAutoShown = false
+
+function anyOverlayOpen() {
+  return (
+    !!document.querySelector('.modal-backdrop') ||
+    !$('#builder').classList.contains('hidden') ||
+    !!document.querySelector('#hud-view:not(.hidden)')
+  )
+}
+
+function healthRowsHtml(checks) {
+  return checks
+    .map(
+      (c) => `
+      <li class="h-row h-${c.status}">
+        <span class="h-mark">${STATUS_ICON[c.status] || ''}</span>
+        <span class="h-body"><b>${esc(c.label)}</b><span class="h-detail">${esc(c.detail)}</span></span>
+      </li>`
+    )
+    .join('')
+}
+
+async function runHealth({ autoOpen = false } = {}) {
+  let h
+  try {
+    h = await window.kova.health()
+  } catch {
+    return null
+  }
+  // Only a genuine failure tints the topbar icon (red) - warnings (e.g. the
+  // proxy theme not armed) are near-permanent for many users, so tinting on them
+  // would leave the icon lit forever and drain its signal. Warnings still show
+  // amber inside the panel rows.
+  const btn = $('#health')
+  btn.classList.toggle('health-fail', h.status === 'fail')
+  if (h.status !== 'fail') healthAutoShown = false // re-arm once things recover
+  // Never auto-surface before first-run is settled (the wizard owns that path).
+  if (autoOpen && onboarded && h.status === 'fail' && !healthAutoShown && !anyOverlayOpen()) {
+    healthAutoShown = true
+    showHealth()
+  }
+  return h
+}
+
+async function showHealth() {
+  if (document.querySelector('.modal-health')) return
+  const wrap = document.createElement('div')
+  wrap.className = 'modal-backdrop'
+  wrap.innerHTML = `
+    <div class="modal modal-health" role="dialog" aria-modal="true">
+      <h3>Health check</h3>
+      <ul class="h-list"><li class="muted">Running checks…</li></ul>
+      <div class="modal-actions">
+        <button class="m-recheck">Re-check</button>
+        <button class="m-ok primary">Close</button>
+      </div>
+    </div>`
+  const listEl = wrap.querySelector('.h-list')
+  const recheck = async () => {
+    const h = await runHealth()
+    listEl.innerHTML = h ? healthRowsHtml(h.checks) : '<li class="muted">Check failed to run.</li>'
+  }
+  const done = () => {
+    document.removeEventListener('keydown', onKey, true)
+    wrap.remove()
+  }
+  const onKey = (e) => {
+    if (e.key === 'Escape' || e.key === 'Enter') {
+      e.stopPropagation()
+      done()
+    }
+  }
+  wrap.addEventListener('mousedown', (e) => {
+    if (e.target === wrap) done()
+  })
+  wrap.querySelector('.m-recheck').addEventListener('click', recheck)
+  wrap.querySelector('.m-ok').addEventListener('click', done)
+  document.addEventListener('keydown', onKey, true)
+  document.body.appendChild(wrap)
+  wrap.querySelector('.m-ok').focus()
+  recheck()
+}
+
+// ---- first-run wizard -----------------------------------------------------------
+// A 3-step intro shown once (settings.onboarded). Welcome -> environment check
+// (reuses the health rows, minus the theme-arm nag) -> arm live-theme swapping.
+function showWizard() {
+  let resolveWizard
+  const wizardDone = new Promise((r) => (resolveWizard = r))
+  const wrap = document.createElement('div')
+  wrap.className = 'modal-backdrop'
+  const modal = document.createElement('div')
+  modal.className = 'modal modal-wizard'
+  modal.setAttribute('role', 'dialog')
+  modal.setAttribute('aria-modal', 'true')
+  wrap.appendChild(modal)
+
+  const finish = async () => {
+    try {
+      await window.kova.setSettings({ onboarded: true })
+    } catch {
+      // even if persisting the flag fails, don't trap the user behind the modal
+    }
+    onboarded = true
+    document.removeEventListener('keydown', onKey, true)
+    wrap.remove()
+    resolveWizard()
+  }
+  // Required flow: the wizard only completes via the Finish button, so it re-shows
+  // until then. Esc is swallowed (so it can't leak to background handlers) but
+  // does NOT dismiss, and clicking the backdrop does nothing.
+  const onKey = (e) => {
+    if (e.key === 'Escape') e.stopPropagation()
+  }
+
+  let step = 0
+  const dots = () =>
+    `<span class="wiz-dots">${[0, 1, 2].map((i) => `<span class="wiz-dot${i === step ? ' on' : ''}"></span>`).join('')}</span>`
+
+  const steps = [
+    () => `
+      <div class="wiz-head"><span class="wiz-step-label">Step 1 of 3</span>${dots()}</div>
+      <div class="wiz-body">
+        <h3>Welcome to KovaPresets</h3>
+        <p>Save your KovaaK's <b>crosshair, theme, sounds, sens and HUD</b> as presets, then switch
+        between them with one click or a global hotkey - without alt-tabbing out of a run.</p>
+        <p>Two quick checks and one 15-second in-game step and you're set.</p>
+      </div>
+      <div class="wiz-actions"><span></span><button class="wiz-next primary">Get started →</button></div>`,
+    () => `
+      <div class="wiz-head"><span class="wiz-step-label">Step 2 of 3</span>${dots()}</div>
+      <div class="wiz-body">
+        <h3>Checking your setup</h3>
+        <p>KovaPresets writes KovaaK's own settings files. Making sure it can find them and write to them:</p>
+        <ul class="h-list"><li class="muted">Running checks…</li></ul>
+      </div>
+      <div class="wiz-actions"><button class="wiz-back">← Back</button><button class="wiz-next primary wiz-spacer">Next →</button></div>`,
+    () => `
+      <div class="wiz-head"><span class="wiz-step-label">Step 3 of 3</span>${dots()}</div>
+      <div class="wiz-body">
+        <h3>Arm live theme swapping</h3>
+        <p>Themes normally only load when the game starts. KovaPresets gets around that with one
+        proxy theme, <b>!KovaPreset</b>, that you select in-game <b>once</b> - after that, theme
+        presets apply live when you open the settings screen.</p>
+        <p><b>Do this:</b> create the proxy below, then in KovaaK's go to
+        <b>Settings → Game → Theme</b> and pick <b>!KovaPreset</b> (it sorts to the top).</p>
+        <p class="wiz-arm-status muted">Not created yet.</p>
+      </div>
+      <div class="wiz-actions"><button class="wiz-back">← Back</button>
+        <span class="wiz-spacer"></span>
+        <button class="wiz-arm">Create !KovaPreset</button>
+        <button class="wiz-next primary">Finish</button></div>`,
+  ]
+
+  const wire = () => {
+    modal.querySelector('.wiz-next')?.addEventListener('click', () => {
+      if (step >= steps.length - 1) return finish()
+      step++
+      paint()
+    })
+    modal.querySelector('.wiz-back')?.addEventListener('click', () => {
+      step--
+      paint()
+    })
+    if (step === 1) {
+      const listEl = modal.querySelector('.h-list')
+      runHealth().then((h) => {
+        // drop the "select !KovaPreset" nag here - step 3 handles that
+        const rows = h ? h.checks.filter((c) => c.id !== 'proxy') : []
+        listEl.innerHTML = rows.length
+          ? healthRowsHtml(rows)
+          : '<li class="muted">Check failed to run.</li>'
+      })
+    }
+    if (step === 2) {
+      const arm = modal.querySelector('.wiz-arm')
+      const status = modal.querySelector('.wiz-arm-status')
+      arm.addEventListener('click', async () => {
+        const res = await window.kova.ensureProxy()
+        if (res.ok) {
+          status.textContent = res.existed
+            ? '!KovaPreset already exists - just select it in-game.'
+            : 'Created. Now select !KovaPreset in KovaaK\'s theme menu.'
+          status.classList.remove('muted')
+          arm.disabled = true
+        } else {
+          status.textContent = res.error || 'Could not create it.'
+        }
+      })
+    }
+  }
+  const paint = () => {
+    modal.innerHTML = steps[step]()
+    wire()
+    modal.querySelector('.wiz-next')?.focus() // Enter advances / finishes
+  }
+
+  document.addEventListener('keydown', onKey, true)
+  document.body.appendChild(wrap)
+  paint()
+  return wizardDone
 }
 
 // An update downloads silently in the background; this is the only thing the
@@ -795,6 +1008,7 @@ async function applyPreset(preset) {
 }
 
 let lastRenderSig = ''
+let prevInstall // detect the game path appearing/moving/vanishing between polls
 async function refresh(rescan) {
   // Don't re-render under an open builder/editor - it closes native popups
   // (this is what made the dropdowns unscrollable) and can eat typed input.
@@ -803,6 +1017,13 @@ async function refresh(rescan) {
   if (dragReordering) return
   if (cpick.isOpen()) return // a re-render would tear out the popover's anchor
   current = await window.kova.state(rescan ? { rescan: true } : undefined)
+  // Re-run health only when the install changed (or on an explicit rescan): a
+  // path that just moved/vanished is the main silent failure, and it re-colors
+  // the heart + auto-surfaces the panel. Never on the plain 5s tick (it probes disk).
+  if (rescan || current.install !== prevInstall) {
+    prevInstall = current.install
+    runHealth({ autoOpen: true })
+  }
   maybeOfferUpdate()
   const pill = $('#game-pill')
   if (!current.install) {
@@ -1074,7 +1295,20 @@ $('#b-create').addEventListener('click', async () => {
   renderPresets(current.presets, current.active)
   builder.classList.add('hidden')
 })
-$('#refresh').addEventListener('click', () => refresh(true)) // manual = full re-scan
+// Manual = full re-scan. A rescan is silent when nothing changed (the re-render
+// is identical), so it read as "nothing happened" - spin the icon and confirm
+// with a toast so the click is always acknowledged.
+$('#refresh').addEventListener('click', async (e) => {
+  const btn = e.currentTarget
+  btn.classList.add('spinning')
+  await refresh(true)
+  setTimeout(() => btn.classList.remove('spinning'), 600)
+  toast(
+    current?.install ? 'Re-scanned - install &amp; game state are up to date.' : "Re-scanned - still can't find KovaaK's.",
+    current?.install ? 'ok' : 'warn'
+  )
+})
+$('#health').addEventListener('click', showHealth)
 $('#help').addEventListener('click', showHelp)
 $('#win-min').addEventListener('click', () => window.kova.winMinimize())
 $('#win-close').addEventListener('click', () => window.kova.winClose())
@@ -1096,6 +1330,7 @@ $('#import').addEventListener('click', async () => {
 // ---- settings (auto re-enter) ---------------------------------------------------
 async function loadSettingsUi() {
   const s = await window.kova.getSettings()
+  onboarded = !!s.onboarded
   $('#auto-restart').checked = !!s.autoRestart
   $('#launch-startup').checked = !!s.launchOnStartup
   $('#restart-key-note').textContent =
@@ -1119,7 +1354,6 @@ $('#launch-startup').addEventListener('change', async (e) => {
     'ok'
   )
 })
-loadSettingsUi()
 $('#deactivate').addEventListener('click', async () => {
   const res = await window.kova.deactivate()
   await refresh()
@@ -1146,5 +1380,26 @@ window.kova.onHotkeyApplied(({ name, theme, weaponChanged, restarted }) => {
   toast(`Hotkey applied <b>${esc(name)}</b>${bits.length ? ' - ' + bits.join(', ') : ''}.`, 'ok', 5000)
 })
 
-refresh()
-setInterval(refresh, 5000)
+// Boot: settle settings (incl. onboarded) and populate the UI before anything
+// modal shows. The 5s poll is started right after the first paint - BEFORE the
+// wizard - so a first-paint hiccup or an unfinished wizard can never leave the
+// app un-polled. Then show the first-run wizard for a new user, and finally let
+// the health check surface any problem the wizard didn't already put in front of
+// them (auto-open is suppressed while the wizard is still up).
+async function boot() {
+  try {
+    await loadSettingsUi()
+    await refresh()
+  } catch {
+    // first paint failed (e.g. a transient IPC error) - the poll below recovers
+  }
+  setInterval(refresh, 5000)
+  try {
+    if (!onboarded) await showWizard()
+    onboarded = true
+    await runHealth({ autoOpen: true })
+  } catch {
+    // never let onboarding/health throwing stop the already-running app
+  }
+}
+boot()
