@@ -206,6 +206,7 @@ body {
 #game-pill,
 #launch,
 #help,
+#health,
 #refresh {
   height: 32px;
 }
@@ -332,14 +333,35 @@ button.ghost {
   background: transparent;
   padding: 6px 10px;
 }
-/* help + refresh: square icon buttons matching the navbar height */
+/* help + refresh + health: square icon buttons matching the navbar height */
 #refresh,
-#help {
+#help,
+#health {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 32px;
   padding: 0;
+}
+#health svg {
+  width: 16px;
+  height: 16px;
+}
+/* spin the ↻ glyph on a manual re-scan so the click is visibly acknowledged */
+#refresh .ricon {
+  display: inline-block;
+  line-height: 1;
+}
+#refresh.spinning .ricon {
+  animation: kova-spin 0.6s ease;
+}
+@keyframes kova-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 button.danger:hover {
   border-color: var(--danger);
@@ -1330,6 +1352,138 @@ button.play:hover {
   font-weight: 600;
 }
 
+/* health check - only a real failure tints the topbar icon (warnings stay
+   neutral there, but still show amber on the panel rows) */
+#health.health-fail {
+  color: var(--danger);
+}
+.modal-health {
+  width: min(540px, calc(100vw - 48px));
+  max-height: 82vh;
+  overflow-y: auto;
+}
+.modal-health h3 {
+  font-family: 'Fraunces', Georgia, serif;
+  font-size: 17px;
+  margin-bottom: 12px;
+}
+.h-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.h-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 13px;
+}
+.h-mark {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-pill);
+  margin-top: 1px;
+}
+.h-mark svg {
+  width: 12px;
+  height: 12px;
+}
+.h-ok .h-mark {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+}
+.h-warn .h-mark {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+}
+.h-fail .h-mark {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+}
+.h-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.h-body b {
+  color: var(--fg);
+  font-weight: 600;
+}
+.h-detail {
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+/* first-run wizard */
+.modal-wizard {
+  width: min(480px, calc(100vw - 48px));
+}
+.wiz-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.wiz-step-label {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.wiz-dots {
+  display: flex;
+  gap: 6px;
+}
+.wiz-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+  opacity: 0.5;
+}
+.wiz-dot.on {
+  background: var(--accent);
+  opacity: 1;
+}
+.wiz-body h3 {
+  font-family: 'Fraunces', Georgia, serif;
+  font-size: 19px;
+  margin-bottom: 8px;
+}
+.wiz-body p {
+  font-size: 13px;
+  color: var(--fg-subtle);
+  line-height: 1.5;
+}
+.wiz-body p + p {
+  margin-top: 8px;
+}
+.wiz-body .h-list {
+  margin-top: 12px;
+}
+.wiz-body b {
+  color: var(--fg);
+  font-weight: 600;
+}
+.wiz-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 20px;
+}
+.wiz-actions button {
+  height: 32px;
+  padding: 0 14px;
+}
+.wiz-actions .wiz-spacer {
+  margin-left: auto;
+}
+
 /* toast */
 .toast {
   position: fixed;
@@ -1384,12 +1538,49 @@ button.play:hover {
 .check {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   cursor: pointer;
   font-size: 13px;
 }
-.check input {
-  accent-color: var(--accent);
+/* on/off settings render as a pill toggle in the accent colour, not the raw
+   native checkbox (which drew as an unstyled grey square against the dark UI) */
+.check input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  position: relative;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 20px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.check input[type='checkbox']::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--fg-muted);
+  transform: translateY(-50%);
+  transition: transform 120ms ease, background 120ms ease;
+}
+.check input[type='checkbox']:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.check input[type='checkbox']:checked::before {
+  transform: translate(14px, -50%);
+  background: var(--accent-contrast);
+}
+.check input[type='checkbox']:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: 2px;
 }
 .settings-row .muted {
   font-size: 12px;

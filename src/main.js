@@ -144,7 +144,7 @@ const userData = () => app.getPath('userData')
 const pendingFile = () => path.join(userData(), 'pending.json')
 
 // ---- app settings (small flags, not presets) -----------------------------------
-const SETTINGS_DEFAULTS = { autoRestart: false, trayTipShown: false, launchOnStartup: false }
+const SETTINGS_DEFAULTS = { autoRestart: false, trayTipShown: false, launchOnStartup: false, onboarded: false }
 const settingsFile = () => path.join(userData(), 'settings.json')
 function loadSettings() {
   try {
@@ -692,6 +692,29 @@ ipcMain.handle('preset:apply', (_e, id) => {
 ipcMain.handle('presets:deactivate', () => deactivatePresets())
 
 ipcMain.handle('game:restart', () => doRestartScenario())
+
+// Diagnostics for the health panel + first-run wizard. Uses the cached install
+// (findInstall) and write-probes the settings folders, so it's a user-driven
+// call, never on the state poll path.
+ipcMain.handle('health:check', () => k.checkHealth(findInstall()))
+
+// Create the !KovaPreset proxy theme file up front (first-run "arm live themes"
+// step), so it shows in KovaaK's theme list before any preset has been applied.
+// Seeded from the current setup, so selecting it changes nothing until a preset
+// with a theme is applied. No-op if it already exists.
+ipcMain.handle('proxy:ensure', () => {
+  const install = findInstall()
+  if (!install) return { ok: false, error: "KovaaK's install not found." }
+  try {
+    const dir = path.join(install, 'Saved', 'SaveGames', 'Themes')
+    fs.mkdirSync(dir, { recursive: true })
+    if (fs.existsSync(path.join(dir, `${k.PROXY_THEME}.json`))) return { ok: true, existed: true }
+    k.writeProxyTheme(install, k.readActive(install).primary)
+    return { ok: true, existed: false }
+  } catch {
+    return { ok: false, error: 'Could not create the proxy theme file.' }
+  }
+})
 
 ipcMain.handle('game:launch', () => {
   shell.openExternal(`steam://rungameid/${STEAM_APP_ID}`)

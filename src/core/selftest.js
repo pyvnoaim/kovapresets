@@ -41,3 +41,13 @@ const clone = JSON.parse(JSON.stringify(active))
 clone.weapon.CrosshairFile = 'blank.png'
 console.log('\nweaponDiffers vs tweaked clone:', k.weaponDiffers(install, clone.weapon))
 console.log('primaryDiffers vs same snapshot:', k.primaryDiffers(install, active.primary))
+
+// health check - probeWrites:false keeps it strictly read-only (accessSync, no
+// temp file). Shape + a sane result against the real install.
+const health = k.checkHealth(install, { probeWrites: false })
+assert.ok(Array.isArray(health.checks) && health.checks.length, 'health returns checks')
+assert.ok(['ok', 'warn', 'fail'].includes(health.status), 'health status is valid')
+assert.equal(health.checks.find((c) => c.id === 'install').status, 'ok', 'install check ok when found')
+const missing = k.checkHealth(null)
+assert.equal(missing.status, 'fail', 'null install is a fail')
+console.log('\nhealth:', health.status, '-', health.checks.map((c) => `${c.id}:${c.status}`).join(' '))

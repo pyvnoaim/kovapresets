@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld('kova', {
   launchGame: () => ipcRenderer.invoke('game:launch'),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (patch) => ipcRenderer.invoke('settings:set', patch),
+  health: () => ipcRenderer.invoke('health:check'),
+  ensureProxy: () => ipcRenderer.invoke('proxy:ensure'),
   exportPresets: (id) => ipcRenderer.invoke('presets:export', id),
   importPresets: () => ipcRenderer.invoke('presets:import'),
   hudSave: (uiRaw) => ipcRenderer.invoke('hud:save', uiRaw),
