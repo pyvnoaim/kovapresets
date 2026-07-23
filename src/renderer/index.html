@@ -70,7 +70,13 @@
             </label>
             <label class="field tip-wrap" data-tip="Crosshair scale - goes live on scenario entry">
               <span class="field-label">Crosshair size</span>
-              <input id="b-size" type="text" inputmode="decimal" placeholder="keep current" spellcheck="false" />
+              <div class="size-row">
+                <canvas id="b-xprev" class="b-xprev" width="96" height="96" aria-hidden="true"></canvas>
+                <div class="size-ctl">
+                  <input id="b-size" type="range" min="0.25" max="3" step="0.05" value="1" aria-label="Crosshair size" />
+                  <span id="b-size-val" class="muted">keep current</span>
+                </div>
+              </div>
             </label>
             <label class="field">
               <span class="field-label">Crosshair color</span>

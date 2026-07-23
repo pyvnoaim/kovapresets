@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('kova', {
   installUpdate: () => ipcRenderer.invoke('update:install'),
   winMinimize: () => ipcRenderer.invoke('win:minimize'),
   toggleDevtools: () => ipcRenderer.invoke('win:devtools'),
+  reload: () => ipcRenderer.invoke('win:reload'),
   winClose: () => ipcRenderer.invoke('win:close'),
   restartScenario: () => ipcRenderer.invoke('game:restart'),
   launchGame: () => ipcRenderer.invoke('game:launch'),

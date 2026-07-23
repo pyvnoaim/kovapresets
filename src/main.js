@@ -12,6 +12,7 @@ const {
 } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
+const { pathToFileURL } = require('node:url')
 const { execFile } = require('node:child_process')
 const k = require('./core/kovaaks')
 const store = require('./core/presets')
@@ -97,13 +98,18 @@ function createWindow() {
   // in a game-supplied string (crosshair/theme/scenario names) can't reach it.
   // External links go through shell.openExternal, which these don't affect.
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-  // Same-URL navigation is Ctrl+R/F5 (the renderer calls location.reload(),
-  // which is renderer-initiated and does reach this event) - anything else is
-  // the page trying to leave index.html, which nothing here legitimately does.
+  // Block anything that tries to leave index.html - nothing here legitimately
+  // navigates. Compared against a STABLE precomputed URL, not the live
+  // getURL(): reload goes through win:reload (webContents.reload(), which never
+  // fires this), so the only navigations that reach here are the page trying to
+  // leave - and matching getURL() was fragile (empty during a transient load,
+  // or a different file:// casing on Windows) and could wrongly block a reload.
+  const indexFile = path.join(__dirname, 'renderer', 'index.html')
+  const indexUrl = pathToFileURL(indexFile).toString()
   win.webContents.on('will-navigate', (e, url) => {
-    if (url !== win.webContents.getURL()) e.preventDefault()
+    if (url !== indexUrl) e.preventDefault()
   })
-  win.loadFile(path.join(__dirname, 'renderer', 'index.html'))
+  win.loadFile(indexFile)
   // Close hides to the tray so global hotkeys keep working; quit via the tray menu.
   win.on('close', (e) => {
     if (quitting) return
@@ -695,6 +701,10 @@ ipcMain.handle('game:launch', () => {
 ipcMain.handle('win:minimize', () => win?.minimize())
 ipcMain.handle('win:devtools', () => win?.webContents.toggleDevTools())
 ipcMain.handle('win:close', () => win?.close()) // routes through close-to-tray
+// Programmatic reload: it never fires will-navigate, so the guard below can't
+// block it - unlike a renderer location.reload(), whose URL-string match is
+// fragile (Windows file:// casing, transient getURL()).
+ipcMain.handle('win:reload', () => win?.webContents.reload())
 
 ipcMain.handle('settings:get', () => loadSettings())
 
