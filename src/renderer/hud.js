@@ -558,6 +558,7 @@ $('#hud-reset').addEventListener('click', () => {
 })
 $('#hud-save').addEventListener('click', async () => {
   const { status } = await window.kova.hudSave(hudSerialize())
+  if (status === 'invalid') return toast("Couldn't save that layout - nothing was written.", 'err')
   hudClose()
   toast(
     status === 'queued'

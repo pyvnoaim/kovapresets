@@ -584,7 +584,6 @@ function renderPresets(presets, active) {
 
     const colorBtn = row.querySelector('.xcolor')
     if (colorBtn) {
-      let commitTimer
       colorBtn.addEventListener('click', () => {
         cpick.show(colorBtn, colorToHex(preset.weapon?.CrosshairColor), (hexVal) => {
           // live preview on the row; the store write is debounced, and there's
@@ -593,10 +592,7 @@ function renderPresets(presets, active) {
           preset.weapon.CrosshairColor = cc
           colorBtn.firstElementChild.style.background = hexVal
           if (xprev) drawCrosshair(xprev, crosshair(preset), cc)
-          clearTimeout(commitTimer)
-          commitTimer = setTimeout(async () => {
-            current.presets = await window.kova.updateWeapon(preset.id, { CrosshairColor: cc })
-          }, 250)
+          queueWeaponWrite(preset.id, { CrosshairColor: cc })
         })
       })
     }
@@ -724,9 +720,30 @@ async function reenterScenario() {
   else toast(esc(res.error || "Couldn't re-enter the scenario."), 'err')
 }
 
+// The color picker fires on every pointer move, so its store write is debounced.
+// Only one picker is open at a time, so one write can ever be in flight - and
+// applying reads the preset from the STORE by id, so the write has to land
+// first or a colour picked <250ms ago would apply as the old one.
+let weaponWrite = null // { id, patch, timer }
+function queueWeaponWrite(id, patch) {
+  // switching rows mid-debounce: land the old preset's write before it gets
+  // merged into the new one's patch
+  if (weaponWrite && weaponWrite.id !== id) flushWeaponWrite()
+  clearTimeout(weaponWrite?.timer)
+  weaponWrite = { id, patch: { ...weaponWrite?.patch, ...patch }, timer: setTimeout(flushWeaponWrite, 250) }
+}
+async function flushWeaponWrite() {
+  const w = weaponWrite
+  if (!w) return
+  weaponWrite = null
+  clearTimeout(w.timer)
+  current.presets = await window.kova.updateWeapon(w.id, w.patch)
+}
+
 async function applyPreset(preset) {
   try {
-    const { weaponChanged, theme, running } = await window.kova.apply(preset)
+    await flushWeaponWrite()
+    const { weaponChanged, theme, running } = await window.kova.apply(preset.id)
     await refresh()
     // while the game runs, offer the one-tap re-enter right on the toast
     const reenter = weaponChanged && running ? { label: 'Re-enter now', run: reenterScenario } : null
@@ -898,6 +915,7 @@ function populateBuilder(preset) {
     : activeThemeLabel(current.active, current.presets).name
   $('#b-theme').placeholder = `keep current (${themeLabel || 'none'})`
   $('#b-crosshair').placeholder = `keep current (${noExt(crosshair(src)) || 'none'})`
+  $('#b-size').placeholder = `keep current (${parseFloat(src.weapon?.CrosshairScale) || 1})`
   $('#b-sound').placeholder = `keep current (${bodyHit(src) || 'none'})`
   const curSens = sensOf(src)
   $('#b-sens').placeholder =
@@ -913,6 +931,7 @@ function populateBuilder(preset) {
   $('#b-sens').value = ''
   $('#b-dpi').value = ''
   $('#b-crosshair').value = ''
+  $('#b-size').value = ''
   $('#b-sound').value = ''
   $('#b-killsound').value = ''
   $('#b-create').textContent = preset ? 'Save changes' : 'Create preset'
@@ -970,6 +989,7 @@ $('#b-create').addEventListener('click', async () => {
         (editingPresetId ? null : `Preset ${(current?.presets?.length || 0) + 1}`),
       theme: pick('#b-theme', opts.themes, 'theme'),
       crosshair: pick('#b-crosshair', opts.crosshairs, 'crosshair'),
+      crosshairScale: numPick('#b-size', 'crosshair size', false),
       // edit mode: an untouched picker sends nothing, so a preset with no
       // color of its own doesn't silently gain the seeded white
       crosshairColor:
