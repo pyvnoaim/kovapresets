@@ -63,8 +63,8 @@ KovaPresets reads and writes those same files, nothing more:
 
 | What | File |
 |---|---|
-| Crosshair, combat sounds, per-scenario sens | `weaponsettings.ini` |
-| Theme, event sounds, global sens, DPI | `PrimaryUserSettings.json` |
+| Crosshair, combat sounds | `weaponsettings.ini` |
+| Theme, event sounds, sens, DPI | `PrimaryUserSettings.json` |
 | Theme definitions | `Themes\<name>.json` |
 | HUD window layout | `UI.json` |
 
@@ -74,6 +74,12 @@ loads. `PrimaryUserSettings.json` is only read when the game launches, but the
 **selected theme's** definition file is re-read every time you open the in game
 settings screen. KovaPresets uses that: it owns one proxy theme file called
 `!KovaPreset`, and applying a preset rewrites it, so themes can swap live.
+
+That scenario-entry reload does **not** cover sens, despite `weaponsettings.ini`
+holding `OverrideSens`/`HorizontalSens`. Writing those externally has no effect
+(verified by changing sens and crosshair in one write: on scenario entry the
+crosshair changed and the sens did not). So sens presets go through the global
+`XSens`/`YSens` and land on the next launch, alongside DPI.
 
 Anything that can't go live yet is queued and written the moment the game quits,
 so nothing is lost if you apply mid-session.

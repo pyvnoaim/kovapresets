@@ -821,16 +821,57 @@ button.play:hover {
   min-width: 0;
   width: 100%;
 }
+/* The chip line is always one row. The viewport clips; .summary-track holds the
+   chips and is allowed to be wider than it, so when the chips don't fit they get
+   scrolled into view (see .is-marquee) rather than the last ones being cut off. */
 .preset .summary {
-  display: flex;
-  align-items: baseline;
-  /* one line always - sound names ellipsize down to a readable floor, and
-     only past that does the tail clip (full text is in the row tooltip) */
-  flex-wrap: nowrap;
   overflow: hidden;
-  gap: 8px;
   margin-top: 5px;
   min-width: 0;
+}
+/* width:max-content with NO max-width cap on purpose - a cap would let the chips
+   shrink to fit, so scrollWidth would equal clientWidth and the JS could never
+   detect the overflow it needs to measure. The chips keep their natural size and
+   .summary does the clipping. */
+.preset .summary .summary-track {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: nowrap;
+  gap: 8px;
+  width: max-content;
+}
+/* overflowing: ease the track to its far end and back, so every chip is legible.
+   --marq (distance) and --marq-dur (distance-proportional) are set per row in JS. */
+.preset .summary.is-marquee .summary-track {
+  animation: summary-marquee var(--marq-dur, 4s) ease-in-out 1.2s infinite alternate;
+}
+/* hovering the row parks it, so you can stop it where you want to read */
+.preset:hover .summary.is-marquee .summary-track {
+  animation-play-state: paused;
+}
+@keyframes summary-marquee {
+  /* holds at both ends - alternate replays this backwards, so one set does both */
+  0%,
+  16% {
+    transform: translateX(0);
+  }
+  84%,
+  100% {
+    transform: translateX(calc(-1 * var(--marq, 0px)));
+  }
+}
+/* No sliding for anyone who asked not to see motion - fall back to the previous
+   behaviour instead of a permanently clipped tail: let the track shrink so the
+   sound names ellipsize again, with the full text still in the row tooltip. */
+@media (prefers-reduced-motion: reduce) {
+  .preset .summary.is-marquee .summary-track {
+    animation: none;
+  }
+  .preset .summary .summary-track {
+    width: auto;
+    max-width: 100%;
+    min-width: 0;
+  }
 }
 .preset .summary .sm-val {
   flex-shrink: 0;
@@ -1535,6 +1576,77 @@ button.play:hover {
   padding-top: 14px;
   border-top: 1px solid var(--border);
 }
+/* for rows whose content is a labelled block rather than one inline control -
+   the default wrapping flex row broke long option labels across lines */
+.settings-row.stack {
+  display: block;
+}
+/* the trailing note is a span, so it needs to be told to hold its own line here */
+.settings-row.stack .muted {
+  display: block;
+  margin-top: 8px;
+}
+
+/* Collapsible settings block. Native <details> so there's no open/closed state to
+   keep in sync - the summary shows the current choice, so collapsed still tells
+   you what's set. */
+/* baseline, not center: the label is 10px mono and the value 12px Inter, so
+   centring them left their baselines a pixel or two apart and read as sloppy.
+   The caret is the one thing that should be optically centred, so it opts out. */
+.fold > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  padding: 2px 0;
+  /* it's a toggle - dragging across it shouldn't select the label text */
+  user-select: none;
+}
+.fold > summary::-webkit-details-marker {
+  display: none;
+}
+/* matching line-height so the two different type sizes share a clean baseline */
+.fold > summary .field-label {
+  line-height: 1.3;
+}
+/* caret drawn in CSS so it can rotate; ▸ closed, ▾ open. A rotated square's
+   visual mass sits toward one corner of its box, so it gets a fixed-size box,
+   center alignment and a small nudge rather than sitting on the text baseline. */
+.fold > summary::before {
+  content: '';
+  flex: 0 0 auto;
+  align-self: center;
+  box-sizing: border-box;
+  width: 6px;
+  height: 6px;
+  margin: 0 1px;
+  border-right: 1.5px solid var(--fg-muted);
+  border-bottom: 1.5px solid var(--fg-muted);
+  transform: rotate(-45deg);
+  transition: transform 120ms ease, border-color 120ms ease;
+}
+.fold[open] > summary::before {
+  /* open points down; shift up a touch so the ▾ reads as centred, not low */
+  transform: rotate(45deg) translate(-1px, -1px);
+}
+.fold > summary:hover::before {
+  border-color: var(--accent);
+}
+.fold > summary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: 3px;
+  border-radius: var(--radius-control);
+}
+/* the current value, so a collapsed fold is still informative */
+.fold-value {
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--accent);
+}
+.fold[open] .fold-value {
+  display: none;
+}
 .check {
   display: inline-flex;
   align-items: center;
@@ -1584,6 +1696,94 @@ button.play:hover {
 }
 .settings-row .muted {
   font-size: 12px;
+}
+
+/* Pick-one settings render as stacked cards rather than a row of native radios:
+   the three labels are long enough that inline ones wrapped mid-option, which
+   made it unclear which text belonged to which button. The selected card carries
+   the accent, same language as the .check toggle above. */
+.opt-list {
+  display: grid;
+  gap: 6px;
+  margin: 6px 0 2px;
+}
+.opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.opt:hover {
+  border-color: var(--border-strong);
+}
+.opt:has(input:checked) {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.opt input[type='radio'] {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 1px 0 0;
+  position: relative;
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.opt input[type='radio']:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.opt input[type='radio']:checked::before {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: var(--accent-contrast);
+}
+.opt input[type='radio']:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: 2px;
+}
+.opt-body {
+  display: grid;
+  gap: 2px;
+}
+.opt-title {
+  font-size: 13px;
+  color: var(--fg);
+}
+.opt:has(input:checked) .opt-title {
+  color: var(--accent);
+}
+.opt-desc {
+  font-size: 12px;
+  color: var(--fg-muted);
+  line-height: 1.45;
+}
+/* inline duration hint, so the cost sits with the title instead of padding it */
+.opt-tag {
+  margin-left: 7px;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-strong);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--fg-muted);
+  vertical-align: 1px;
+}
+.opt:has(input:checked) .opt-tag {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--accent);
 }
 @keyframes rise {
   from {

@@ -324,7 +324,7 @@ function showHelp() {
       <h3>How it works</h3>
       <ul>
         <li><b>Presets</b> save your KovaaK's look &amp; sound: crosshair, theme, sounds, HUD, sens. Applying writes the game's own settings files.</li>
-        <li><b>Going live:</b> crosshair, sounds and scenario sens apply on the next scenario load. Theme: open the game's settings once. The rest lands when the game quits or starts.</li>
+        <li><b>Going live:</b> crosshair and combat sounds apply on the next scenario load. Theme: open the game's settings once. Sens, DPI and the rest land when the game quits or starts.</li>
         <li><b>Once:</b> select the <b>!KovaPreset</b> theme in-game so themes can swap live.</li>
         <li><b>Re-enter now</b> reloads your scenario via Steam so changes kick in. The run auto-starts, press your reset bind when ready.</li>
         <li><b>Hotkeys</b> (bolt icon) work even in-game, and stay alive in the tray when you close the window.</li>
@@ -601,16 +601,27 @@ const themeName = (snap) =>
 const crosshair = (snap) => snap?.weapon?.CrosshairFile || ''
 // display-only: "OPDot.png" reads better as "OPDot" (files keep the extension)
 const noExt = (f) => String(f || '').replace(/\.[a-z0-9]+$/i, '')
+// sens/pitch/volume values carry float noise - 2dp everywhere they're shown
+const round2 = (v) => Math.round(v * 100) / 100
 const bodyHit = (snap) => snap?.weapon?.BodyHitSound || ''
-// effective sens: the weapon-file override when on (live per scenario), else
-// the global settings value
+// effective sens: the weapon-file override when the player has it on (it wins at
+// launch, though it never applies live - see setSensPick), else the global value.
+// The override's scale is OverrideSensScaleString, NOT SensScale - the latter
+// mirrors the legacy SensitivityScaleTargetEnum and routinely disagrees (e.g.
+// "Quake/Source" while the player is actually on cm/360), which would label the
+// number with a scale it isn't in.
 const sensOf = (snap) => {
   const w = snap?.weapon || {}
+  const globalScale = snap?.primary?.stringSettings?.SensScaleString || ''
   if (String(w.OverrideSens).toLowerCase() === 'true' && w.HorizontalSens != null)
-    return { value: w.HorizontalSens, scale: w.SensScale || '', override: true }
+    return {
+      value: w.HorizontalSens,
+      scale: w.OverrideSensScaleString || globalScale,
+      override: true,
+    }
   const x = snap?.primary?.floatSettings?.XSens
   if (x == null) return null
-  return { value: x, scale: snap?.primary?.stringSettings?.SensScaleString || '', override: false }
+  return { value: x, scale: globalScale, override: false }
 }
 
 // Is preset P exactly what's active now? (every field the preset specifies matches;
@@ -693,7 +704,9 @@ function summaryHtml(preset) {
   if (kill) parts.push(sndChip('kill', kill))
   // spawn sound deliberately not chipped - it's in the hover tooltip + editor
   if (!parts.length) return '<span class="sm-empty">no changes</span>'
-  return parts.join('<span class="sm-sep">·</span>')
+  // inner track so the chips can exceed the row width and be scrolled into view
+  // by the marquee (see setupSummaryMarquees) instead of the tail being clipped
+  return `<span class="summary-track">${parts.join('<span class="sm-sep">·</span>')}</span>`
 }
 
 // Plain-text version of the same summary - the row's hover tooltip, so chips
@@ -732,7 +745,6 @@ function renderActive(active) {
   const w = active.weapon
   const s = active.primary?.stringSettings || {}
   const f = active.primary?.floatSettings || {}
-  const round2 = (v) => Math.round(v * 100) / 100
   const theme = activeThemeLabel(active, current?.presets)
   const sens = sensOf(active)
   const dpi = active.primary?.integerSettings?.DPI
@@ -766,6 +778,41 @@ function renderActive(active) {
       <div class="sub">${[dpi != null ? `DPI ${esc(dpi)}` : '', sens?.override ? 'scenario override' : ''].filter(Boolean).join(' · ') || '&nbsp;'}</div>
     </div>`
 }
+
+// The chip line is one row and used to just clip its tail, hiding whatever came
+// last (usually the sound names). Instead, when the chips don't fit, ease them
+// back and forth so every chip is readable. Distance-proportional duration keeps
+// the speed constant whether it's 20px or 300px over, and the animation only
+// exists when it's needed - a fitting line stays perfectly still.
+const MARQUEE_PX_PER_S = 38
+const MARQUEE_MIN_OVERFLOW = 6 // sub-pixel rounding isn't worth animating
+function setupSummaryMarquees(root = document) {
+  for (const box of root.querySelectorAll('.preset .summary')) {
+    const track = box.querySelector('.summary-track')
+    if (!track) continue
+    // clear first so a re-measure can also turn the animation OFF
+    box.classList.remove('is-marquee')
+    track.style.removeProperty('--marq')
+    track.style.removeProperty('--marq-dur')
+    // clientWidth is 0 while the list is un-laid-out (hidden view, or rendered
+    // before first paint). Measuring then would read the whole track as overflow
+    // and animate a nonsense distance, so wait for a real layout instead.
+    if (!box.clientWidth) continue
+    const overflow = Math.ceil(track.scrollWidth - box.clientWidth)
+    if (overflow < MARQUEE_MIN_OVERFLOW) continue
+    track.style.setProperty('--marq', `${overflow}px`)
+    track.style.setProperty('--marq-dur', `${Math.max(2.5, overflow / MARQUEE_PX_PER_S).toFixed(1)}s`)
+    box.classList.add('is-marquee')
+  }
+}
+
+// Re-measure on resize: the window is freely resizable, so a line that fits at
+// one width overflows at another (and vice versa).
+let marqueeResizeTimer = null
+window.addEventListener('resize', () => {
+  clearTimeout(marqueeResizeTimer)
+  marqueeResizeTimer = setTimeout(() => setupSummaryMarquees(), 120)
+})
 
 function renderPresets(presets, active) {
   const wrap = $('#presets')
@@ -900,6 +947,8 @@ function renderPresets(presets, active) {
     })
     wrap.appendChild(row)
   }
+  // measure after layout - scrollWidth is meaningless until the rows are laid out
+  requestAnimationFrame(() => setupSummaryMarquees(wrap))
 }
 
 // Click the hotkey chip, press a combo; Esc cancels, Backspace/Delete clears.
@@ -956,6 +1005,19 @@ async function reenterScenario() {
   else toast(esc(res.error || "Couldn't re-enter the scenario."), 'err')
 }
 
+// Offered when sens/DPI are outstanding - those only load at launch, so a
+// re-entry can't help and this is the only one-click way to make them live.
+async function restartGame() {
+  const res = await window.kova.restartGame()
+  if (res.ok)
+    toast(
+      `Restarting KovaaK's${res.scenario ? ` and reopening <b>${esc(res.scenario)}</b>` : ''} - sens and DPI load with it.`,
+      'ok',
+      7000
+    )
+  else toast(esc(res.error || "Couldn't restart KovaaK's."), 'err')
+}
+
 // The color picker fires on every pointer move, so its store write is debounced.
 // Only one picker is open at a time, so one write can ever be in flight - and
 // applying reads the preset from the STORE by id, so the write has to land
@@ -979,26 +1041,61 @@ async function flushWeaponWrite() {
 async function applyPreset(preset) {
   try {
     await flushWeaponWrite()
-    const { weaponChanged, theme, running } = await window.kova.apply(preset.id)
+    const { weaponChanged, theme, running, followUp, launchOnly } = await window.kova.apply(preset.id)
     await refresh()
-    // while the game runs, offer the one-tap re-enter right on the toast
-    const reenter = weaponChanged && running ? { label: 'Re-enter now', run: reenterScenario } : null
-    const live = weaponChanged ? 'Crosshair & sounds are live - re-enter your scenario.' : ''
+    // A completed restart relaunches the game, so EVERYTHING lands through the
+    // launch path - the theme included. None of the manual follow-up instructions
+    // below apply, so this is the one case that replaces them outright.
+    if (followUp?.mode === 'restart' && followUp.ok)
+      return toast(
+        `Restarting KovaaK's - everything applies, including sens, DPI and theme.${followUp.scenario ? ` Reopening <b>${esc(followUp.scenario)}</b>.` : ''}`,
+        'ok',
+        7000
+      )
+    // Everything else still needs the player to do something, so the guidance is
+    // built up rather than replaced: a re-enter covers the weapon file but NOT the
+    // theme, and a failed restart covers nothing at all.
+    const reentered = followUp?.mode === 'reenter' && followUp.ok
+    const failed = followUp?.mode === 'restart' && followUp.error ? `${esc(followUp.error)} ` : ''
+    // Sens/DPI can't be made live by writing files, so say so explicitly - silence
+    // here reads as "it didn't work". Both escape hatches are offered: restart, or
+    // type the value into the game's settings, which does apply immediately.
+    const pending =
+      running && launchOnly?.length
+        ? launchOnly.map((f) => `${f.field} ${round2(f.value)}`).join(' & ')
+        : ''
+    const restartNote = pending
+      ? ` <b>${esc(pending)}</b> needs a KovaaK's restart, or set it by hand in the game's settings.`
+      : ''
+    // one action slot: re-entry is the cheap common case, but when the only thing
+    // outstanding needs a relaunch, offer that instead of a no-op button
+    const reenter =
+      weaponChanged && running && !reentered
+        ? { label: 'Re-enter now', run: reenterScenario }
+        : pending
+          ? { label: "Restart KovaaK's", run: restartGame }
+          : null
+    const live = weaponChanged
+      ? reentered
+        ? 'Crosshair & sounds are live.'
+        : 'Crosshair & sounds are live - re-enter your scenario.'
+      : ''
+    const lead = `${failed}${live}${restartNote}`.trim()
     if (theme === 'live') {
-      toast(`${live} <b>Theme: open KovaaK's settings once and it applies.</b>`.trim(), 'ok', 6500, reenter)
+      toast(`${lead} <b>Theme: open KovaaK's settings once and it applies.</b>`.trim(), failed ? 'warn' : 'ok', 6500, reenter)
     } else if (theme === 'arming') {
       toast(
-        `${live} Theme is staged - <b>select the "!KovaPreset" theme (top of KovaaK's theme list) once</b>; after that, theme changes apply when you open settings.`.trim(),
+        `${lead} Theme is staged - <b>select the "!KovaPreset" theme (top of KovaaK's theme list) once</b>; after that, theme changes apply when you open settings.`.trim(),
         'warn',
         8000,
         reenter
       )
     } else if (theme === 'queued') {
-      toast(`${live} Layout/palette changes apply when you quit KovaaK's.`.trim(), 'warn', 6000, reenter)
+      toast(`${lead} Layout/palette changes apply when you quit KovaaK's.`.trim(), 'warn', 6000, reenter)
     } else if (theme === 'applied') {
-      toast(`Applied. ${live || "Theme is set for your next KovaaK's launch."}`.trim(), 'ok', 3600, reenter)
-    } else if (weaponChanged) {
-      toast(live, 'ok', 5000, reenter)
+      toast(`Applied. ${lead || "Theme is set for your next KovaaK's launch."}`.trim(), 'ok', 3600, reenter)
+    } else if (lead) {
+      toast(lead, failed ? 'warn' : 'ok', 5000, reenter)
     } else {
       toast('Already active - nothing to change.', 'ok')
     }
@@ -1205,7 +1302,7 @@ function populateBuilder(preset) {
   $('#b-create').textContent = preset ? 'Save changes' : 'Create preset'
   $('#b-note').textContent = preset
     ? 'Empty fields keep the preset as it is. Palette and HUD layout stay untouched.'
-    : 'Palette, HUD layout, and pitch/volume settings are carried over from your current setup. Sens uses your current sens scale; DPI applies on the game\'s next launch.'
+    : "Palette, HUD layout, and pitch/volume settings are carried over from your current setup. Sens uses your current sens scale; sens and DPI both apply on the game's next launch."
 }
 
 function openEditor(preset) {
@@ -1331,29 +1428,41 @@ $('#import').addEventListener('click', async () => {
 async function loadSettingsUi() {
   const s = await window.kova.getSettings()
   onboarded = !!s.onboarded
-  $('#auto-restart').checked = !!s.autoRestart
-  $('#launch-startup').checked = !!s.launchOnStartup
+  // 'autoRestart' is the pre-ladder boolean; it maps onto the re-enter rung
+  const mode = ['manual', 'reenter', 'restart'].includes(s.applyMode)
+    ? s.applyMode
+    : s.autoRestart
+      ? 'reenter'
+      : 'manual'
+  for (const el of document.querySelectorAll('input[name="apply-mode"]'))
+    el.checked = el.value === mode
+  setApplyModeSummary(mode)
+  // each option carries its own description now - this only adds the one thing
+  // they share, so it stays a single line
   $('#restart-key-note').textContent =
-    'Re-entering relaunches your last-played scenario through Steam, the same way play links on the web do.'
+    'Both go through Steam, the same way play links on the web do.'
 }
-$('#auto-restart').addEventListener('change', async (e) => {
-  await window.kova.setSettings({ autoRestart: e.target.checked })
-  toast(
-    e.target.checked
-      ? 'Hotkey applies will now restart your scenario automatically.'
-      : 'Auto re-enter turned off.',
-    'ok'
-  )
-})
-$('#launch-startup').addEventListener('change', async (e) => {
-  await window.kova.setSettings({ launchOnStartup: e.target.checked })
-  toast(
-    e.target.checked
-      ? 'KovaPresets will start with Windows, tucked into the tray.'
-      : 'Startup launch turned off.',
-    'ok'
-  )
-})
+const APPLY_MODE_LABEL = {
+  manual: 'Do nothing',
+  reenter: 'Re-enter my scenario',
+  restart: "Restart KovaaK's",
+}
+// keeps the collapsed fold meaningful - it shows the current choice
+const setApplyModeSummary = (mode) => {
+  $('#apply-mode-summary').textContent = APPLY_MODE_LABEL[mode] || ''
+}
+const APPLY_MODE_TOAST = {
+  manual: 'Applies will just write the files - re-enter your scenario when you want them live.',
+  reenter: 'Applies will re-enter your scenario automatically.',
+  restart: "Applies will restart KovaaK's when needed, so sens and DPI land too.",
+}
+for (const el of document.querySelectorAll('input[name="apply-mode"]'))
+  el.addEventListener('change', async (e) => {
+    if (!e.target.checked) return
+    await window.kova.setSettings({ applyMode: e.target.value })
+    setApplyModeSummary(e.target.value)
+    toast(APPLY_MODE_TOAST[e.target.value], 'ok')
+  })
 $('#deactivate').addEventListener('click', async () => {
   const res = await window.kova.deactivate()
   await refresh()
@@ -1370,14 +1479,25 @@ $('#b-killsound-play').addEventListener('click', () =>
   playSound($('#b-killsound').value.trim() || current?.active?.primary?.stringSettings?.KillConfirmedSound)
 )
 window.kova.onChanged(() => refresh()) // queued changes landed after the game quit
-window.kova.onHotkeyApplied(({ name, theme, weaponChanged, restarted }) => {
+window.kova.onHotkeyApplied(({ name, theme, weaponChanged, followUp, launchOnly }) => {
   refresh()
   const bits = []
-  if (restarted) bits.push('scenario restarted, changes are live')
+  if (followUp?.mode === 'restart' && followUp.ok)
+    bits.push("restarting KovaaK's, everything applies")
+  else if (followUp?.mode === 'restart' && followUp.error) bits.push(esc(followUp.error))
+  else if (followUp?.mode === 'reenter' && followUp.ok) bits.push('scenario re-entered, changes are live')
   else if (weaponChanged) bits.push('crosshair/sounds live on scenario re-entry')
-  if (theme === 'live') bits.push('theme applies when you open settings')
-  else if (theme === 'arming') bits.push('select !KovaPreset in the theme menu once')
-  toast(`Hotkey applied <b>${esc(name)}</b>${bits.length ? ' - ' + bits.join(', ') : ''}.`, 'ok', 5000)
+  if (!(followUp?.mode === 'restart' && followUp.ok)) {
+    if (theme === 'live') bits.push('theme applies when you open settings')
+    else if (theme === 'arming') bits.push('select !KovaPreset in the theme menu once')
+    // hotkey applies happen mid-session, so this is exactly where a silently
+    // unapplied sens would bite - name the value so it can be typed in-game
+    if (launchOnly?.length)
+      bits.push(
+        `<b>${esc(launchOnly.map((f) => `${f.field} ${round2(f.value)}`).join(' & '))}</b> needs a restart or a manual change in-game`
+      )
+  }
+  toast(`Hotkey applied <b>${esc(name)}</b>${bits.length ? ' - ' + bits.join(', ') : ''}.`, 'ok', 6000)
 })
 
 // Boot: settle settings (incl. onboarded) and populate the UI before anything

@@ -144,7 +144,11 @@ const userData = () => app.getPath('userData')
 const pendingFile = () => path.join(userData(), 'pending.json')
 
 // ---- app settings (small flags, not presets) -----------------------------------
-const SETTINGS_DEFAULTS = { autoRestart: false, trayTipShown: false, launchOnStartup: false, onboarded: false }
+// applyMode ('manual' | 'reenter' | 'restart') is deliberately NOT defaulted here:
+// it has to stay undefined for an existing config so applyMode() can migrate the
+// old autoRestart boolean onto the 'reenter' rung. Defaulting it would merge a
+// 'manual' over every existing user and silently turn their auto re-enter off.
+const SETTINGS_DEFAULTS = { autoRestart: false, trayTipShown: false, onboarded: false }
 const settingsFile = () => path.join(userData(), 'settings.json')
 function loadSettings() {
   try {
@@ -190,6 +194,110 @@ async function doRestartScenario() {
     shell.openExternal(scenarioLink(scenario, true))
   }
   return { ok: true, scenario, hopped: !!parking }
+}
+
+// Full game restart - the only thing that makes sens and DPI take effect, since
+// the game reads PrimaryUserSettings.json at launch and nothing else re-reads it
+// (verified: it rewrites that file from memory on settings interactions but never
+// reads it back, and the weaponsettings sens fields are ignored on the
+// scenario-entry reload). Close -> flush the queued fields while closed -> one
+// deep link, which Steam uses to BOTH launch the game and jump to the scenario.
+const CLOSE_POLL_MS = 500
+const CLOSE_TIMEOUT_MS = 20000
+
+function closeGame() {
+  // WM_CLOSE, not /F: a graceful close lets the game write its own state, and the
+  // pending flush lands after it exits so our values win. A force kill risks
+  // losing the player's unsaved stats for no benefit.
+  return new Promise((resolve) => {
+    execFile('taskkill', ['/IM', 'FPSAimTrainer.exe'], { windowsHide: true }, () => resolve())
+  })
+}
+
+function waitForExit() {
+  return new Promise((resolve) => {
+    const started = Date.now()
+    const tick = () => {
+      execFile(
+        'tasklist',
+        ['/FI', 'IMAGENAME eq FPSAimTrainer.exe', '/NH'],
+        { windowsHide: true },
+        (err, out) => {
+          if (err || !/FPSAimTrainer\.exe/i.test(String(out))) return resolve(true)
+          if (Date.now() - started > CLOSE_TIMEOUT_MS) return resolve(false)
+          setTimeout(tick, CLOSE_POLL_MS)
+        }
+      )
+    }
+    tick()
+  })
+}
+
+// A restart takes tens of seconds and the hotkeys stay live throughout, so a
+// second press must not start an overlapping close/relaunch pair - that could
+// kill the copy Steam just started, or double-launch.
+let restartInFlight = false
+
+async function doRestartGame() {
+  if (restartInFlight) return { ok: false, error: 'A restart is already in progress.' }
+  if (!gameRunning()) return { ok: false, error: "KovaaK's isn't running." }
+  restartInFlight = true
+  try {
+    return await restartGameInner()
+  } finally {
+    restartInFlight = false
+  }
+}
+
+async function restartGameInner() {
+  const install = findInstall()
+  // Read the scenario BEFORE closing - it comes from the stats history, which the
+  // game only appends to, but resolving it up front keeps the ordering obvious.
+  const [scenario] = install ? k.recentScenariosFromStats(install) : []
+  await closeGame()
+  if (!(await waitForExit()))
+    return { ok: false, error: "KovaaK's didn't close - it may be showing a prompt. Close it and the queued settings apply automatically." }
+  gameRunningCache = false
+  // now that the game is gone, the queued sens/DPI/theme can actually land
+  flushPendingIfPossible()
+  if (!scenario) {
+    shell.openExternal(`steam://run/${STEAM_APP_ID}`)
+    return { ok: true, scenario: null }
+  }
+  // no parking hop needed: a fresh launch loads the scenario for the first time
+  shell.openExternal(scenarioLink(scenario, true))
+  return { ok: true, scenario }
+}
+
+// What an apply should do to make itself take effect. Replaces the old
+// autoRestart boolean; 'reenter' is its equivalent.
+const APPLY_MODES = new Set(['manual', 'reenter', 'restart'])
+function applyMode() {
+  const s = loadSettings()
+  if (APPLY_MODES.has(s.applyMode)) return s.applyMode
+  return s.autoRestart ? 'reenter' : 'manual'
+}
+
+// Run the configured follow-up after an apply. `result` is doApplyPreset's.
+// Only escalates when there's something for that step to make live: re-entry is
+// pointless without a weaponsettings change, and a restart is only worth its
+// ~40s when a game-owned field is actually queued.
+async function runApplyFollowUp(result) {
+  if (!result.running) return { mode: 'manual' }
+  const mode = applyMode()
+  // Restart ONLY for fields that genuinely need a launch (result.queued). A
+  // crosshair/sound-only change is fully covered by a scenario re-entry, so
+  // escalating to a ~40s relaunch for it would be pure cost - hence `queued`
+  // here and not `queued || weaponChanged`.
+  if (mode === 'restart' && result.queued) {
+    const r = await doRestartGame()
+    return { mode: 'restart', ok: r.ok, error: r.error, scenario: r.scenario }
+  }
+  if ((mode === 'reenter' || mode === 'restart') && result.weaponChanged) {
+    const r = await doRestartScenario()
+    return { mode: 'reenter', ok: r.ok, error: r.error, scenario: r.scenario }
+  }
+  return { mode: 'manual' }
 }
 
 // ---- pending (game-owned files queued while the game runs) --------------------
@@ -326,6 +434,26 @@ function doApplyPreset(preset) {
   const weaponChanged = k.applyWeapon(install, preset.weapon)
 
   const active = k.readActive(install)
+  // Sens and DPI have no live route at all - the game reads them only at launch
+  // (see setSensPick). Unlike the theme, no in-game gesture picks them up, so a
+  // changed value would otherwise sit there silently doing nothing. Report which
+  // ones changed so the UI can say so instead of the player discovering it.
+  // Carries the VALUE, not just the field name: the other way to apply these is
+  // to type them into the game's own settings screen (which does take effect
+  // immediately), so the UI can only offer that if it can tell you what to type.
+  // Number.isFinite guards both ends: an imported/corrupt preset carrying a
+  // non-numeric sens would otherwise surface as a literal "sens NaN" in the UI,
+  // since NaN !== anything makes the difference check always true.
+  const launchOnly = []
+  const changedNum = (want, cur) =>
+    Number.isFinite(Number(want)) && Number(want) !== Number(cur)
+  const wantSens = preset.primary?.floatSettings?.XSens
+  if (wantSens !== undefined && changedNum(wantSens, active.primary?.floatSettings?.XSens))
+    launchOnly.push({ field: 'sens', value: Number(wantSens) })
+  const wantDpi = preset.primary?.integerSettings?.DPI
+  if (wantDpi !== undefined && changedNum(wantDpi, active.primary?.integerSettings?.DPI))
+    launchOnly.push({ field: 'DPI', value: Number(wantDpi) })
+
   let primaryWant = null
   if (k.primaryDiffers(install, preset.primary)) {
     k.writeProxyTheme(install, preset.primary)
@@ -368,7 +496,10 @@ function doApplyPreset(preset) {
     clearPending()
     theme = 'applied'
   }
-  return { weaponChanged, theme, running }
+  // `queued` = game-owned fields (theme/sens/DPI/palette/HUD) waiting on the game
+  // to close. Only a full restart makes those live, so it gates that escalation.
+  const queued = running && !!(wants.primary || wants.palette != null || wants.ui != null)
+  return { weaponChanged, theme, running, queued, launchOnly }
 }
 
 // ---- global hotkeys -----------------------------------------------------------
@@ -388,12 +519,10 @@ function registerHotkeys() {
           if (!fresh) return
           const result = doApplyPreset(fresh)
           // hotkey applies happen while playing, so the game already has focus -
-          // the auto re-enter is just a keypress away from being fully hands-off
-          let restarted = false
-          if (loadSettings().autoRestart && result.running && result.weaponChanged)
-            restarted = (await doRestartScenario()).ok
+          // the follow-up is what makes it hands-off
+          const followUp = await runApplyFollowUp(result)
           if (win && !win.isDestroyed())
-            win.webContents.send('hotkey-applied', { name: fresh.name, ...result, restarted })
+            win.webContents.send('hotkey-applied', { name: fresh.name, ...result, followUp })
         } catch {
           // install missing mid-session - nothing sane to do from a hotkey
         }
@@ -431,6 +560,23 @@ function loadPresetsMigrated(install) {
     p.primary = base
     changed = true
   }
+  // Presets built while sens was thought to apply live carry only the
+  // weaponsettings override (OverrideSens=true), which the game ignores - so
+  // their sens silently did nothing. Move the value they already hold onto the
+  // route that works (XSens/YSens) and clear the override, which would otherwise
+  // shadow it at launch. The scale falls back to the live one, which is how that
+  // unpinned number was already being read, so no speeds change.
+  let active = null
+  for (const p of presets) {
+    const h = p.weapon?.HorizontalSens
+    if (String(p.weapon?.OverrideSens).toLowerCase() !== 'true' || h == null || h === '') continue
+    const sens = Number(h)
+    if (!Number.isFinite(sens) || sens <= 0) continue
+    if (!active) active = k.readActive(install)
+    p.primary = p.primary || {}
+    k.setSensPick(p.weapon, p.primary, sens, k.sensScaleOf(p.primary, { primary: active.primary }))
+    changed = true
+  }
   if (changed) store.save(userData(), presets)
   return presets
 }
@@ -445,11 +591,9 @@ function trayMenu() {
     click: async () => {
       try {
         const result = doApplyPreset(p)
-        let restarted = false
-        if (loadSettings().autoRestart && result.running && result.weaponChanged)
-          restarted = (await doRestartScenario()).ok
+        const followUp = await runApplyFollowUp(result)
         if (win && !win.isDestroyed())
-          win.webContents.send('hotkey-applied', { name: p.name, ...result, restarted })
+          win.webContents.send('hotkey-applied', { name: p.name, ...result, followUp })
       } catch {
         // install missing - the window surfaces this, a tray click can't
       }
@@ -531,6 +675,9 @@ function dropStaleMaterialIndices(primary) {
   delete primary.integerSettings.FloorMat
 }
 
+// Sens/DPI both need a positive number; an empty field means "keep current".
+const validPick = (v) => v != null && Number.isFinite(Number(v)) && Number(v) > 0
+
 ipcMain.handle('presets:build', (_e, picks) => {
   const install = requireInstall()
   const { active } = readActiveMerged(install)
@@ -539,14 +686,6 @@ ipcMain.handle('presets:build', (_e, picks) => {
   if (picks.crosshairScale > 0) weapon.CrosshairScale = String(picks.crosshairScale)
   if (picks.crosshairColor) weapon.CrosshairColor = picks.crosshairColor
   if (picks.bodyHit != null) weapon.BodyHitSound = picks.bodyHit
-  const sens = Number(picks.sens)
-  if (picks.sens != null && Number.isFinite(sens) && sens > 0) {
-    // scenario sens override: lives in weaponsettings.ini, so it goes live on
-    // scenario entry; the scale stays whatever the player already uses
-    weapon.OverrideSens = 'true'
-    weapon.HorizontalSens = String(sens)
-    weapon.VerticalSens = String(sens)
-  }
 
   const primary = JSON.parse(JSON.stringify(active.primary))
   if (picks.theme) {
@@ -563,11 +702,13 @@ ipcMain.handle('presets:build', (_e, picks) => {
     if (!primary.stringSettings) primary.stringSettings = {}
     primary.stringSettings.KillConfirmedSound = picks.killSound
   }
-  const dpi = Number(picks.dpi)
-  if (picks.dpi != null && Number.isFinite(dpi) && dpi > 0) {
+  if (validPick(picks.dpi)) {
     if (!primary.integerSettings) primary.integerSettings = {}
-    primary.integerSettings.DPI = Math.round(dpi)
+    primary.integerSettings.DPI = Math.round(Number(picks.dpi))
   }
+  // after the theme overlay, so a theme pick can't drop the sens fields
+  if (validPick(picks.sens))
+    k.setSensPick(weapon, primary, Number(picks.sens), k.sensScaleOf(primary, active))
 
   const presets = store.load(userData())
   presets.push({
@@ -595,12 +736,6 @@ ipcMain.handle('presets:update', (_e, id, picks) => {
   if (picks.crosshairScale > 0) p.weapon.CrosshairScale = String(picks.crosshairScale)
   if (picks.crosshairColor) p.weapon.CrosshairColor = picks.crosshairColor
   if (picks.bodyHit != null) p.weapon.BodyHitSound = picks.bodyHit
-  const sens = Number(picks.sens)
-  if (picks.sens != null && Number.isFinite(sens) && sens > 0) {
-    p.weapon.OverrideSens = 'true'
-    p.weapon.HorizontalSens = String(sens)
-    p.weapon.VerticalSens = String(sens)
-  }
   p.primary = p.primary || {}
   if (picks.theme) {
     const fromTheme = k.primaryFromTheme(install, picks.theme)
@@ -616,11 +751,19 @@ ipcMain.handle('presets:update', (_e, id, picks) => {
     if (!p.primary.stringSettings) p.primary.stringSettings = {}
     p.primary.stringSettings.KillConfirmedSound = picks.killSound
   }
-  const dpi = Number(picks.dpi)
-  if (picks.dpi != null && Number.isFinite(dpi) && dpi > 0) {
+  if (validPick(picks.dpi)) {
     if (!p.primary.integerSettings) p.primary.integerSettings = {}
-    p.primary.integerSettings.DPI = Math.round(dpi)
+    p.primary.integerSettings.DPI = Math.round(Number(picks.dpi))
   }
+  // after the theme overlay, so a theme pick can't drop the sens fields. An old
+  // preset may carry no scale of its own - fall back to the live one.
+  if (validPick(picks.sens))
+    k.setSensPick(
+      p.weapon,
+      p.primary,
+      Number(picks.sens),
+      k.sensScaleOf(p.primary, readActiveMerged(install).active)
+    )
   store.save(userData(), presets)
   return presets
 })
@@ -683,15 +826,17 @@ ipcMain.handle('presets:setHotkey', (_e, id, hotkey) => {
 // By id, not by object: what gets written to the game's files is whatever the
 // store holds, so the renderer can't define it. Same lookup the hotkey path
 // does, so both apply exactly the same thing.
-ipcMain.handle('preset:apply', (_e, id) => {
+ipcMain.handle('preset:apply', async (_e, id) => {
   const preset = store.load(userData()).find((p) => p.id === id)
   if (!preset) throw new Error('That preset no longer exists.')
-  return doApplyPreset(preset)
+  const result = doApplyPreset(preset)
+  return { ...result, followUp: await runApplyFollowUp(result) }
 })
 
 ipcMain.handle('presets:deactivate', () => deactivatePresets())
 
 ipcMain.handle('game:restart', () => doRestartScenario())
+ipcMain.handle('game:restartFull', () => doRestartGame())
 
 // Diagnostics for the health panel + first-run wizard. Uses the cached install
 // (findInstall) and write-probes the settings folders, so it's a user-driven
@@ -734,13 +879,6 @@ ipcMain.handle('settings:get', () => loadSettings())
 ipcMain.handle('settings:set', (_e, patch) => {
   const s = { ...loadSettings(), ...patch }
   saveSettings(s)
-  // registering the dev electron.exe as a login item would be nonsense - the
-  // setting still saves, and takes effect from an installed build
-  if ('launchOnStartup' in patch && app.isPackaged)
-    app.setLoginItemSettings({
-      openAtLogin: !!s.launchOnStartup,
-      args: ['--hidden'], // boot into the tray, not a window on the desktop
-    })
   return s
 })
 
@@ -854,6 +992,16 @@ app.whenReady().then(() => {
   setInterval(pollGameRunning, 3000)
   // legacy storage from the removed per-apply undo system
   fs.rmSync(path.join(userData(), 'backups'), { recursive: true, force: true })
+  // The "Start with Windows" setting is gone, but anyone who had it on still has
+  // a registered login item - and with the toggle removed there'd be no way to
+  // turn it off. Clear it once, and drop the dead setting key.
+  if (app.isPackaged && app.getLoginItemSettings().openAtLogin)
+    app.setLoginItemSettings({ openAtLogin: false })
+  const s = loadSettings()
+  if ('launchOnStartup' in s) {
+    delete s.launchOnStartup
+    saveSettings(s)
+  }
   app.on('activate', showWindow)
 })
 

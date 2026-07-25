@@ -100,18 +100,18 @@
                 <button id="b-killsound-play" class="play" data-tip="Preview" type="button">▶</button>
               </div>
             </label>
-            <label class="field tip-wrap" data-tip="Applied as a scenario sens override in your current sens scale - goes live on scenario entry">
+            <label class="field tip-wrap" data-tip="Your global sens, in your current sens scale. The game only reads it at startup, so it lands on the next KovaaK's launch - or type it into the game's settings to apply it now">
               <span class="field-label">Sens</span>
               <input id="b-sens" type="text" inputmode="decimal" placeholder="keep current" spellcheck="false" />
             </label>
-            <label class="field tip-wrap" data-tip="Game DPI setting - applies when KovaaK's next starts (or quits)">
+            <label class="field tip-wrap" data-tip="Game DPI setting - only readable at startup, so it lands on the game's next launch">
               <span class="field-label">DPI</span>
               <input id="b-dpi" type="text" inputmode="numeric" placeholder="keep current" spellcheck="false" />
             </label>
           </div>
           <p id="b-note" class="builder-note muted">
             Palette, HUD layout, and pitch/volume settings are carried over from your current setup.
-            Sens uses your current sens scale; DPI applies on the game's next launch.
+            Sens uses your current sens scale; sens and DPI both apply on the game's next launch.
           </p>
           <div class="builder-actions">
             <button id="b-cancel">Cancel</button>
@@ -120,19 +120,36 @@
         </div>
         <div id="presets" class="presets"></div>
         <p id="empty" class="muted hidden">No presets yet. Set up KovaaK's how you like, then hit <b>Capture as preset</b>.</p>
-        <div class="settings-row">
-          <label class="check">
-            <input id="auto-restart" type="checkbox" />
-            Auto re-enter the scenario after a hotkey apply
-          </label>
+        <details class="settings-row stack fold">
+          <summary>
+            <span class="field-label">After applying a preset</span>
+            <span id="apply-mode-summary" class="fold-value"></span>
+          </summary>
+          <div class="opt-list" role="radiogroup" aria-label="After applying a preset">
+            <label class="opt">
+              <input type="radio" name="apply-mode" value="manual" />
+              <span class="opt-body">
+                <span class="opt-title">Do nothing</span>
+                <span class="opt-desc">Only writes the settings. Re-enter your scenario for crosshair and sounds, and open KovaaK's settings once for the theme. Sens and DPI need a restart, or you can type them into the game's settings yourself.</span>
+              </span>
+            </label>
+            <label class="opt">
+              <input type="radio" name="apply-mode" value="reenter" />
+              <span class="opt-body">
+                <span class="opt-title">Re-enter my scenario</span>
+                <span class="opt-desc">Crosshair and sounds go live right away. Theme still needs you to open KovaaK's settings once. Sens and DPI wait for the next launch, unless you type them into the game's settings yourself.</span>
+              </span>
+            </label>
+            <label class="opt">
+              <input type="radio" name="apply-mode" value="restart" />
+              <span class="opt-body">
+                <span class="opt-title">Restart KovaaK's<span class="opt-tag">~40s</span></span>
+                <span class="opt-desc">Everything applies with nothing left to do - theme, sens and DPI included, no settings visit needed. Reopens your scenario afterwards.</span>
+              </span>
+            </label>
+          </div>
           <span id="restart-key-note" class="muted"></span>
-        </div>
-        <div class="settings-row">
-          <label class="check">
-            <input id="launch-startup" type="checkbox" />
-            Start with Windows (minimized to the tray, so hotkeys are always ready)
-          </label>
-        </div>
+        </details>
       </section>
       <section id="hud-view" class="hidden">
         <div class="section-head">

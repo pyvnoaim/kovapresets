@@ -6,12 +6,22 @@
 //       The game RE-READS this on scenario entry, so edits apply LIVE. Plain INI;
 //       writes preserve BOM + CRLF and touch only our keys.
 //
+//       The file has a global block, then optional per-weapon `[name]` sections
+//       the game writes when you set a per-weapon override in Game Options ->
+//       Weapons -> <weapon>. A section with UseDefaults=false SHADOWS the global
+//       block completely for scenarios using that weapon - see weaponGlobalEnd.
+//
 //   PrimaryUserSettings.json  (theme + event sounds)
-//       The game OWNS this in memory and rewrites it while running (it clobbers
-//       external edits within seconds) and only loads it at launch. So theme edits
+//       The game OWNS this in memory and only loads it at launch, so theme edits
 //       must land while the game is CLOSED; they take effect next launch. We store
 //       the full resolved field set (incl. the material index) captured from the
 //       file itself, so applying restores a self-consistent theme.
+//
+//       It does NOT poll-clobber external edits (verified 2026-07-25: an edit sat
+//       untouched for 12s). It rewrites the file from memory on settings
+//       interactions - opening the settings screen was enough - so a live edit
+//       survives only until the player next touches settings, and is never read
+//       back. Don't mistake that write for the game picking the edit up.
 const fs = require('node:fs')
 const path = require('node:path')
 const { execFileSync } = require('node:child_process')
@@ -27,9 +37,10 @@ const WEAPON_KEYS = [
   'EnableMissSound',
   'MissSound',
   'MissPitchShiftPerDeg',
-  // per-file sens override - weaponsettings reloads on scenario entry, so this
-  // is the LIVE half of scenario-specific sens presets (global sens + DPI live
-  // in PrimaryUserSettings and only apply on launch/quit-flush)
+  // Per-file sens override. Captured and restored so presets preserve whatever
+  // the player has, but NOT the route sens presets use: the game ignores these
+  // on the scenario-entry reload (verified - see setSensPick). Sens presets go
+  // through XSens/YSens in PrimaryUserSettings and apply on the next launch.
   'OverrideSens',
   'HorizontalSens',
   'VerticalSens',
@@ -163,9 +174,54 @@ function paths(install) {
 }
 
 // ---- reading ------------------------------------------------------------------
+// Where the global block ends, i.e. the first per-weapon `[name]` section (or EOF).
+// Every read/write below is scoped to that slice on purpose: the same keys repeat
+// verbatim inside each section, so an unscoped /^Key=/m would silently start
+// hitting section values the moment the field order or section count changed.
+function weaponGlobalEnd(raw) {
+  const m = raw.match(/^\[[^\]\r\n]+\]/m)
+  return m ? m.index : raw.length
+}
+
+// The file is BOM-prefixed, and a BOM sits BEFORE the first key - so /^Key=/m
+// cannot match a key on line 1 (the line starts with U+FEFF, not the letter).
+// Today the game happens to write an unmanaged key (TracerVisible) first, which
+// is the only reason that has never bitten; it would silently read as "" and
+// silently fail to write. Split the BOM off for matching and put it back on write.
+const BOM = '﻿'
+const splitBom = (raw) =>
+  raw.startsWith(BOM) ? { bom: BOM, body: raw.slice(BOM.length) } : { bom: '', body: raw }
+
+// Per-weapon sections that OVERRIDE the global block (UseDefaults=false). These
+// are the player's own per-weapon overrides; we never write them, but a preset's
+// crosshair/sound/sens will not reach scenarios whose weapon has one, so callers
+// surface them rather than letting a preset look silently broken.
+function shadowingWeaponSections(install) {
+  const p = paths(install)
+  if (!fs.existsSync(p.weapon)) return []
+  const { body: raw } = splitBom(fs.readFileSync(p.weapon, 'utf8'))
+  // Split on line-anchored headers rather than "up to the next [": a VALUE
+  // containing a bracket (a sound or crosshair filename can) would otherwise cut
+  // a section short and hide its UseDefaults line.
+  let current = null
+  const bodies = new Map()
+  for (const line of raw.slice(weaponGlobalEnd(raw)).split(/\r?\n/)) {
+    const header = line.match(/^\[([^\]\r\n]+)\]\s*$/)
+    if (header) {
+      current = header[1]
+      bodies.set(current, [])
+    } else if (current) bodies.get(current).push(line)
+  }
+  const out = []
+  for (const [name, lines] of bodies)
+    if (!lines.some((l) => /^UseDefaults=true\s*$/.test(l))) out.push(name)
+  return out
+}
+
 function readWeapon(install) {
   const p = paths(install)
-  const raw = fs.existsSync(p.weapon) ? fs.readFileSync(p.weapon, 'utf8') : ''
+  const { body } = splitBom(fs.existsSync(p.weapon) ? fs.readFileSync(p.weapon, 'utf8') : '')
+  const raw = body.slice(0, weaponGlobalEnd(body))
   const out = {}
   for (const k of WEAPON_KEYS) {
     const m = raw.match(new RegExp(`^${k}=(.*)$`, 'm'))
@@ -460,6 +516,50 @@ function proxyThemeSelected(install) {
   return primary.stringSettings?.CurrentThemeName === PROXY_THEME
 }
 
+// ---- sens picks ---------------------------------------------------------------
+// Sens goes through PrimaryUserSettings (XSens/YSens), NOT the weaponsettings
+// override - so it lands on the game's next launch, exactly like DPI.
+//
+// Verified in-game (2026-07-25), because the naming strongly suggests otherwise:
+// writing OverrideSens=true + HorizontalSens externally does NOTHING, even
+// though the game demonstrably re-reads the file. The same write also bumped
+// CrosshairScale as a control: on scenario entry the crosshair changed and the
+// sens did not. So weaponsettings' scenario-entry reload covers crosshair and
+// sounds but not sens - the sens fields are bound at launch and rewritten from
+// memory. There is no live route for sens; don't reintroduce one on the strength
+// of the field names.
+//
+// Consequence: OverrideSens must be forced OFF. Left on (older versions of this
+// app set it, and a player may have flipped it themselves) the per-weapon
+// override wins at launch and silently shadows the XSens we just set, so the
+// pick would appear to do nothing. HorizontalSens/VerticalSens are written to
+// match purely so the game's weapon-settings UI doesn't show a stale number;
+// with the override off they're inert.
+//
+// The scale must be pinned alongside the value or the same number means a
+// different speed. `SensScale` is deliberately left alone: it mirrors the legacy
+// SensitivityScaleTargetEnum rather than the modern scale string - the two
+// routinely disagree (e.g. "Quake/Source" while the player is on cm/360) - and
+// it rides along verbatim from the capture.
+function setSensPick(weapon, primary, sens, scale) {
+  weapon.OverrideSens = 'false'
+  weapon.HorizontalSens = String(sens)
+  weapon.VerticalSens = String(sens)
+  if (scale) weapon.OverrideSensScaleString = scale
+  if (!primary.floatSettings) primary.floatSettings = {}
+  primary.floatSettings.XSens = sens
+  primary.floatSettings.YSens = sens
+  if (scale) {
+    if (!primary.stringSettings) primary.stringSettings = {}
+    primary.stringSettings.SensScaleString = scale
+  }
+}
+
+// The scale a sens number should be read in: the preset's own, else the one the
+// player currently uses in-game.
+const sensScaleOf = (primary, active) =>
+  primary?.stringSettings?.SensScaleString || active?.primary?.stringSettings?.SensScaleString || ''
+
 // ---- change detection ---------------------------------------------------------
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 
@@ -487,7 +587,12 @@ function primaryDiffers(install, primary) {
 function applyWeapon(install, weapon) {
   if (!weapon) return false
   const p = paths(install)
-  let raw = fs.readFileSync(p.weapon, 'utf8')
+  const { bom, body } = splitBom(fs.readFileSync(p.weapon, 'utf8'))
+  // Only the global block is ours; per-weapon sections are the player's and are
+  // preserved byte-for-byte (they're also what the game reloads for their weapon).
+  const end = weaponGlobalEnd(body)
+  let raw = body.slice(0, end)
+  const tail = body.slice(end)
   const before = raw
   for (const k of WEAPON_KEYS) {
     if (weapon[k] == null) continue
@@ -497,8 +602,9 @@ function applyWeapon(install, weapon) {
     const re = new RegExp(`^${k}=.*$`, 'm')
     if (re.test(raw)) raw = raw.replace(re, () => `${k}=${val}`)
   }
-  if (raw !== before) fs.writeFileSync(p.weapon, raw)
-  return raw !== before
+  if (raw === before) return false
+  fs.writeFileSync(p.weapon, bom + raw + tail)
+  return true
 }
 
 // PrimaryUserSettings.json - only safe while the game is closed (caller enforces).
@@ -599,12 +705,12 @@ function checkHealth(install, { probeWrites = true } = {}) {
     'weaponsettings.ini present',
     weaponOk ? 'ok' : 'fail',
     weaponOk
-      ? 'Crosshair, combat sounds and scenario sens write here.'
+      ? 'Crosshair and combat sounds write here.'
       : "Missing. Launch KovaaK's once so it writes its settings files."
   )
 
   let primaryStatus = 'ok'
-  let primaryDetail = 'Theme, event sounds and DPI write here.'
+  let primaryDetail = 'Theme, event sounds, sens and DPI write here.'
   if (!fs.existsSync(p.primary)) {
     primaryStatus = 'fail'
     primaryDetail = "Missing. Launch KovaaK's once so it writes its settings files."
@@ -678,6 +784,9 @@ module.exports = {
   listOptions,
   weaponDiffers,
   primaryDiffers,
+  setSensPick,
+  sensScaleOf,
+  shadowingWeaponSections,
   applyWeapon,
   applyPrimary,
   applyPalette,
