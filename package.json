@@ -14,7 +14,8 @@
     "start": "electron .",
     "core:test": "node src/core/selftest.js",
     "dist": "electron-builder",
-    "release": "electron-builder --publish always"
+    "release": "node scripts/release.js",
+    "release:publish-only": "electron-builder --publish always"
   },
   "dependencies": {
     "electron-updater": "^6.8.9"
