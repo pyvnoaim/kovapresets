@@ -106,6 +106,30 @@ npm run dist       # build the Windows installer into dist/
 - `src/main.js` — Electron main; owns all filesystem and game access.
 - `src/preload.js` — the entire renderer to main IPC surface.
 - `src/renderer/*` — the UI, plain HTML/CSS/JS with no build step.
+- `scripts/release.js` — the release driver (see below).
+
+### Releasing
+
+```bash
+npm version patch                 # makes the "1.0.6" commit and the v1.0.6 tag
+npm run release                    # push, create the release, build, upload, verify
+npm run release -- --dry-run       # run every check and change nothing
+```
+
+Write `release-notes/<version>.md` first if you want written notes; otherwise
+GitHub generates them from the commits. The app shows the release body in its
+update prompt, so it's worth filling in.
+
+`npm run release` deliberately creates the GitHub release **before** building.
+electron-builder's publisher starts one uploader per artifact and each tries to
+*create* the release, so the loser fails with `422 already_exists` and aborts the
+publish — leaving a live release holding only some of its assets, with a
+`latest.yml` still pointing at the previous version. That shipped a broken
+auto-update twice (v1.0.4, v1.0.5, the former also ending up with two releases on
+one tag). Creating it up front means the uploaders only ever upload, and the
+script re-checks afterwards that the installer, blockmap and `latest.yml` all
+actually landed. If an upload dies half way, `npm run release:publish-only`
+retries just the build-and-upload against the existing release.
 
 Releasing:
 
