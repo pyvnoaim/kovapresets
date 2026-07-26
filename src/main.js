@@ -49,6 +49,18 @@ function findInstall(rescan) {
 // flush waits one 4s tick; an apply mid-transition queues and gets flushed).
 let gameRunningCache = k.isGameRunning()
 const gameRunning = () => gameRunningCache
+// Authoritative answer, for the two paths where a stale "not running" silently
+// eats the write rather than merely delaying it: apply and flush. The poll can
+// report false for up to one tick after the game starts, and an apply landing in
+// that window writes PrimaryUserSettings.json directly and clears pending - so
+// the game's rewrite from launch-time memory drops the sens/DPI/theme with
+// nothing left queued to re-assert it. Launch the game, alt-tab, click a preset
+// is the normal usage pattern, which made it look intermittent. ~50ms tasklist
+// call on a user action only; every other reader still gets the cached value.
+function gameRunningNow() {
+  gameRunningCache = k.isGameRunning()
+  return gameRunningCache
+}
 function pollGameRunning() {
   execFile(
     'tasklist',
@@ -332,7 +344,14 @@ function flushPendingIfPossible() {
 function flushPending() {
   const pending = readPending()
   if (!pending) return false
+  // Cached first, authoritative second, and the order matters for cost: this runs
+  // on a 4s timer for as long as a queue exists (hours, if the game is up), and
+  // the authoritative check is a BLOCKING tasklist spawn on the main process.
+  // Only the cache saying "closed" is dangerous - that's the one direction where
+  // being wrong writes into a live game - so only that path pays, and it happens
+  // once, because the flush it guards clears the queue.
   if (gameRunning()) return false
+  if (gameRunningNow()) return false
   const install = findInstall()
   if (!install) return false
   if (pending.primaryRaw != null)
@@ -429,7 +448,7 @@ function deactivatePresets() {
 // ---- preset apply (shared by IPC and hotkeys) ---------------------------------
 function doApplyPreset(preset) {
   const install = requireInstall()
-  const running = gameRunning()
+  const running = gameRunningNow()
   captureBaselineIfMissing(install)
   const weaponChanged = k.applyWeapon(install, preset.weapon)
 
@@ -454,15 +473,32 @@ function doApplyPreset(preset) {
   if (wantDpi !== undefined && changedNum(wantDpi, active.primary?.integerSettings?.DPI))
     launchOnly.push({ field: 'DPI', value: Number(wantDpi) })
 
-  let primaryWant = null
-  if (k.primaryDiffers(install, preset.primary)) {
-    k.writeProxyTheme(install, preset.primary)
-    primaryWant = JSON.parse(JSON.stringify(preset.primary))
-    if (!primaryWant.stringSettings) primaryWant.stringSettings = {}
-    primaryWant.stringSettings.CurrentThemeName = k.PROXY_THEME
+  // primaryDiffers compares against PrimaryUserSettings.json ON DISK, which is
+  // only the truth while the game is CLOSED - a running game owns those fields in
+  // memory and rewrites the file from them. So it answers "is there a change to
+  // report", NOT "is there anything to write": a preset whose sens already matches
+  // disk still has to be re-asserted after the game quits, or the game's own
+  // rewrite puts the launch-time value back and the pick silently does nothing.
+  // That was the other half of the intermittent sens - the half a fresh
+  // running-check can't fix.
+  const primaryChanged = k.primaryDiffers(install, preset.primary)
+  let primaryIntent = null
+  if (preset.primary) {
+    primaryIntent = JSON.parse(JSON.stringify(preset.primary))
+    if (!primaryIntent.stringSettings) primaryIntent.stringSettings = {}
+    if (primaryChanged) {
+      k.writeProxyTheme(install, preset.primary)
+      primaryIntent.stringSettings.CurrentThemeName = k.PROXY_THEME
+    } else {
+      // Nothing visibly differs, so don't touch theme SELECTION: the proxy file
+      // still holds whatever the last apply wrote, and pinning the game to it
+      // here would hand the player a different preset's theme. This intent
+      // exists purely to survive the game's exit rewrite.
+      delete primaryIntent.stringSettings.CurrentThemeName
+    }
   }
   const wants = {
-    primary: primaryWant,
+    primary: primaryChanged ? primaryIntent : null,
     palette: preset.palette != null && preset.palette !== active.palette ? preset.palette : null,
     ui: preset.ui != null && preset.ui !== active.ui ? preset.ui : null,
   }
@@ -483,7 +519,9 @@ function doApplyPreset(preset) {
     // opinion, so whatever else queued it stands - e.g. a HUD layout saved from
     // the editor mid-session, then a preset with no `ui` applied on top.
     const prev = readPending() || {}
-    const next = { weapon: preset.weapon, ...wants }
+    // `wants` is the CHANGE set (it drives the messaging below); the queue takes
+    // the full intent, so an unchanged-on-disk field is still re-asserted at quit.
+    const next = { weapon: preset.weapon, ...wants, primary: primaryIntent }
     if (preset.palette == null && prev.palette != null) next.palette = prev.palette
     if (preset.ui == null && prev.ui != null) next.ui = prev.ui
     setPending(next)
@@ -602,6 +640,11 @@ function trayMenu() {
   return Menu.buildFromTemplate([
     ...(items.length ? items : [{ label: 'No presets yet', enabled: false }]),
     { type: 'separator' },
+    // The window can go unopened for days, so the staged update needs a route
+    // that doesn't depend on anyone looking at it.
+    ...(updateReady
+      ? [{ label: `Restart to update to ${updateReady}`, click: () => installUpdate() }]
+      : []),
     { label: 'Open KovaPresets', click: showWindow },
     { label: 'Quit', click: () => app.quit() },
   ])
@@ -964,6 +1007,10 @@ function initAutoUpdate() {
   autoUpdater.autoInstallOnAppQuit = true
   autoUpdater.on('update-downloaded', (info) => {
     updateReady = info.version
+    // The tray is the only surface guaranteed to be visible - the window is
+    // usually hidden when this fires, which is exactly how a staged update used
+    // to go unmentioned indefinitely.
+    if (tray && !tray.isDestroyed()) tray.setToolTip(`KovaPresets - update ${info.version} ready`)
   })
   // offline, rate-limited, or no release yet - just try again on the next tick
   autoUpdater.on('error', () => {})
@@ -975,12 +1022,13 @@ function initAutoUpdate() {
 // The renderer polls state every few seconds, so the staged-update flag rides
 // along there instead of a push event - it can't be missed by a window that
 // was hidden (--hidden startup) or reloaded when the event fired.
-ipcMain.handle('update:install', () => {
+function installUpdate() {
   if (!updateReady) return { ok: false }
   quitting = true // the window's close handler otherwise just hides to the tray
   require('electron-updater').autoUpdater.quitAndInstall()
   return { ok: true }
-})
+}
+ipcMain.handle('update:install', () => installUpdate())
 
 app.whenReady().then(() => {
   createWindow()

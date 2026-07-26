@@ -560,19 +560,32 @@ function showWizard() {
   return wizardDone
 }
 
-// An update downloads silently in the background; this is the only thing the
-// user ever sees about it. Shown once per staged version, and left up far
-// longer than a normal toast - restarting is the user's call, not urgent.
+// An update downloads silently in the background. Two ways in, because the app
+// spends most of its life in the tray: a topbar button that stays until it's
+// used, and a toast for whoever happens to be looking.
+//
+// The toast alone was the whole notification, and it could never be seen in the
+// common case - the update lands while the window is hidden, the toast paints
+// into a window nobody is looking at, expires after 60s, and the one-shot latch
+// means it never comes back. That's how 1.0.5 sat downloaded-but-unmentioned.
 let updateOfferedFor = null
 function maybeOfferUpdate() {
   const v = current?.updateReady
-  if (!v || updateOfferedFor === v) return
+  const btn = $('#update-btn')
+  btn.classList.toggle('hidden', !v)
+  if (!v) return
+  btn.textContent = `Update ${v}` // kept short - the topbar has no room to spare
+  // Only spend the one-shot toast on a window that can actually be seen.
+  if (document.visibilityState !== 'visible' || updateOfferedFor === v) return
   updateOfferedFor = v
   toast(`Version ${esc(v)} is ready to install.`, 'ok', 60000, {
     label: 'Restart now',
     run: () => window.kova.installUpdate(),
   })
 }
+$('#update-btn').addEventListener('click', () => window.kova.installUpdate())
+// Coming back to the window is the moment the toast can finally land.
+document.addEventListener('visibilitychange', maybeOfferUpdate)
 
 // action = { label, run }: renders a button inside the toast (e.g. "Re-enter now")
 function toast(msg, kind = '', ms = 3600, action = null) {

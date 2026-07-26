@@ -17,6 +17,9 @@
           <button data-theme="light" data-tip="Light theme">Light</button>
           <button data-theme="dark" data-tip="Dark theme">Dark</button>
         </div>
+        <!-- Stays put until it's clicked: the app lives in the tray, so a toast
+             is not enough on its own to tell anyone an update is waiting. -->
+        <button id="update-btn" class="primary hidden" data-tip="An update is downloaded - restart to install it"></button>
         <span id="game-pill" class="pill pill-off">KovaaK's: checking…</span>
         <button id="launch" class="ghost hidden" data-tip="Launch KovaaK's via Steam">Launch</button>
         <button id="health" class="ghost" data-tip="Health check" aria-label="Health check"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2 6 4-12 2 6h6"/></svg></button>

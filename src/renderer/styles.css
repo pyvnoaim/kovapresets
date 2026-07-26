@@ -155,6 +155,11 @@ body {
 }
 .brand {
   margin-right: auto;
+  /* The topbar doesn't wrap and the window clips overflow-x, so anything that
+     doesn't fit pushes the caption buttons off the right edge - i.e. out of
+     reach. The wordmark yields that space first; the controls stay clickable. */
+  min-width: 0;
+  overflow: hidden;
 }
 /* custom caption buttons (frameless window) - minimize + close only */
 .win-controls {
@@ -204,6 +209,7 @@ body {
    Launch button. */
 .seg,
 #game-pill,
+#update-btn,
 #launch,
 #help,
 #health,
