@@ -433,6 +433,63 @@ function themeToPrimary(t) {
 // game's alphabetically-ordered theme list.
 const PROXY_THEME = '!KovaPreset'
 
+// The proxy's name doubles as a readout of which theme it currently mirrors, so
+// overlays (and the in-game menu) show something meaningful instead of a bare
+// "!KovaPreset". Verified in-game 2026-07-29, and the constraints are tight:
+//
+//   - The game takes the menu label from the file's `themeName` FIELD, not the
+//     filename: a file still called !KovaPreset.json displayed as
+//     "!KovaPreset (mirroring test)". So the filename stays fixed forever and
+//     only the field moves - no per-preset files, no collisions with the
+//     player's own themes, no stale duplicates to sweep up.
+//   - That same field is the SELECTION IDENTITY. CurrentThemeName is matched
+//     against it, not against the filename. Change one without the other and
+//     the match fails: the theme dropdown renders EMPTY and the selection is
+//     lost. The two must always move together.
+//   - CurrentThemeName lives in PrimaryUserSettings, which the game owns in
+//     memory and rewrites from it on any settings interaction - including the
+//     menu-open that triggers live theme swap. An external edit while the game
+//     runs is therefore erased at the worst possible moment (measured: written
+//     19:05:28, clobbered back 19:05:46 on settings-open).
+//
+// Hence the rule the callers implement: the proxy's NAME only ever changes
+// while the game is CLOSED (an apply with no game, or the pending flush at
+// quit). While the game runs, applies rewrite the proxy's CONTENTS only and
+// leave the name alone - the game re-reads the file it selected at launch, so
+// renaming mid-session would break live swap. The cost is that the name is
+// accurate at launch and goes stale if you swap presets mid-session: the
+// visuals change, the label doesn't. That is a deliberate trade - there is no
+// arrangement that gives both, because the selection is bound in memory at
+// launch and only disk-before-launch can move it.
+const PROXY_SEP = ' - '
+// Keep it short: this string is a row in the game's theme dropdown, and the
+// mirrored name is already prefixed. Quotes/backslashes need no escaping here -
+// it goes out through JSON.stringify - but newlines would wreck the row.
+function proxyThemeName(mirrored) {
+  let label = String(mirrored || '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .trim()
+  // A preset captured while the proxy was already selected carries the proxy's
+  // own name. Unwrap it to the theme it mirrors instead of collapsing to the
+  // bare name, or re-applying such a preset would silently drop the readout.
+  if (label.startsWith(PROXY_THEME + PROXY_SEP)) label = label.slice((PROXY_THEME + PROXY_SEP).length)
+  if (!label || label === PROXY_THEME || label === 'KovaPreset') return PROXY_THEME
+  return `${PROXY_THEME}${PROXY_SEP}${label.slice(0, 40)}`
+}
+
+// Every name the proxy can go by, including the two legacy ones ('KovaPreset'
+// predates the '!' prefix). Callers must never test CurrentThemeName against
+// PROXY_THEME with ===, or a proxy carrying a mirrored name reads as a foreign
+// theme and the whole live-swap path silently disengages.
+const isProxyThemeName = (name) =>
+  name === PROXY_THEME || name === 'KovaPreset' || String(name || '').startsWith(PROXY_THEME + PROXY_SEP)
+
+// The mirrored theme back out of a proxy name ('' when it carries none).
+const mirroredThemeName = (name) =>
+  String(name || '').startsWith(PROXY_THEME + PROXY_SEP)
+    ? String(name).slice((PROXY_THEME + PROXY_SEP).length)
+    : ''
+
 // The proxy file's contents in primary-settings shape - what the game is
 // actually rendering while the proxy theme is selected. Single fixed-name file
 // read (no directory scan), cheap enough for the state poll path.
@@ -449,14 +506,14 @@ function readProxyPrimary(install) {
 
 // Inverse of primaryFromTheme: build a theme-file object from the preset's
 // primary-shaped fields. Only fields the preset actually has are written.
-function themeFileFromPrimary(primary) {
+function themeFileFromPrimary(primary, name) {
   const s = primary.stringSettings || {}
   const f = primary.floatSettings || {}
   const i = primary.integerSettings || {}
   const b = primary.booleanSettings || {}
   const v = primary.vectorSettings || {}
   const c = primary.colorSettings || {}
-  const t = { themeName: PROXY_THEME }
+  const t = { themeName: name || PROXY_THEME }
   const put = (key, val) => {
     if (val !== undefined) t[key] = val
   }
@@ -496,10 +553,38 @@ function themeFileFromPrimary(primary) {
   return t
 }
 
-// Write the preset's theme into the proxy theme file. Safe at any time - the
-// game only reads it on menu-open (and at launch when it's the selected theme).
-function writeProxyTheme(install, primary) {
-  const t = themeFileFromPrimary(primary)
+// The name the proxy file currently goes by. This is the game's selection key
+// while it runs, so a mid-session content rewrite has to carry it forward
+// verbatim rather than recomputing it - see the PROXY_THEME notes.
+function readProxyName(install) {
+  try {
+    const t = JSON.parse(
+      fs.readFileSync(path.join(paths(install).themes, `${PROXY_THEME}.json`), 'utf8')
+    )
+    if (isProxyThemeName(t.themeName)) return t.themeName
+  } catch {
+    // fall through
+  }
+  // No readable proxy (deleted by hand, or a Steam "verify integrity" wiped the
+  // Themes folder). Recreating it under the BASE name would break live swap for
+  // the rest of the session, because the game is still selecting whatever it
+  // read at launch. CurrentThemeName on disk is exactly that: while the game
+  // runs it rewrites the file from memory, so it holds the launch-time pick.
+  try {
+    const selected = readPrimary(install).stringSettings?.CurrentThemeName
+    if (isProxyThemeName(selected)) return selected
+  } catch {
+    // fall through
+  }
+  return PROXY_THEME
+}
+
+// Write the preset's theme into the proxy theme file. Contents are safe to write
+// at any time - the game only reads them on menu-open (and at launch when it's
+// the selected theme). `name` is NOT: pass the existing readProxyName() while
+// the game runs, and the new one only when it's closed.
+function writeProxyTheme(install, primary, name) {
+  const t = themeFileFromPrimary(primary, name)
   const dir = paths(install).themes
   const file = path.join(dir, `${PROXY_THEME}.json`)
   fs.writeFileSync(file, JSON.stringify(t, null, '\t'))
@@ -510,10 +595,26 @@ function writeProxyTheme(install, primary) {
   return file
 }
 
+// Re-label the proxy without touching its visuals - the game-quit flush, where
+// the queued CurrentThemeName finally lands and the two have to end up equal.
+// Returns false if there's no proxy file yet, so the caller doesn't strand
+// CurrentThemeName pointing at a name nothing answers to.
+function setProxyThemeName(install, name) {
+  const file = path.join(paths(install).themes, `${PROXY_THEME}.json`)
+  try {
+    const t = JSON.parse(fs.readFileSync(file, 'utf8'))
+    t.themeName = name || PROXY_THEME
+    fs.writeFileSync(file, JSON.stringify(t, null, '\t'))
+    return true
+  } catch {
+    return false
+  }
+}
+
 // Is the proxy currently the selected theme (i.e. is live switching armed)?
 function proxyThemeSelected(install) {
   const primary = readPrimary(install)
-  return primary.stringSettings?.CurrentThemeName === PROXY_THEME
+  return isProxyThemeName(primary.stringSettings?.CurrentThemeName)
 }
 
 // ---- sens picks ---------------------------------------------------------------
@@ -794,7 +895,12 @@ module.exports = {
   readResolution,
   isGameRunning,
   PROXY_THEME,
+  proxyThemeName,
+  isProxyThemeName,
+  mirroredThemeName,
   readProxyPrimary,
+  readProxyName,
   writeProxyTheme,
+  setProxyThemeName,
   proxyThemeSelected,
 }

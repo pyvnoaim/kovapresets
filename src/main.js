@@ -360,7 +360,23 @@ function flushPending() {
       path.join(install, 'Saved', 'SaveGames', 'PrimaryUserSettings.json'),
       pending.primaryRaw
     )
-  else if (pending.primary) k.applyPrimary(install, pending.primary)
+  else if (pending.primary) {
+    // Re-label the proxy BEFORE pointing CurrentThemeName at the new name: the
+    // two are matched against each other, and a crash between them is only
+    // recoverable in this order. A file whose name nothing selects is inert; a
+    // selection naming no file empties the game's theme dropdown.
+    // (applyPrimary walks PRIMARY_MANAGED only, so proxyName rides along inert.)
+    //
+    // The re-label FAILING is the case that strands us: the Themes folder lives
+    // inside the game install, so a Steam "verify integrity" can delete the
+    // proxy between the apply and this flush. Rebuild it from the queued intent
+    // rather than letting CurrentThemeName name a theme that doesn't exist.
+    if (pending.primary.proxyName) {
+      if (!k.setProxyThemeName(install, pending.primary.proxyName))
+        k.writeProxyTheme(install, pending.primary, pending.primary.proxyName)
+    }
+    k.applyPrimary(install, pending.primary)
+  }
   if (pending.palette != null) k.applyPalette(install, pending.palette)
   if (pending.ui != null) k.applyUi(install, pending.ui)
   // re-assert the weapon intent the game's exit-write may have reverted
@@ -487,8 +503,19 @@ function doApplyPreset(preset) {
     primaryIntent = JSON.parse(JSON.stringify(preset.primary))
     if (!primaryIntent.stringSettings) primaryIntent.stringSettings = {}
     if (primaryChanged) {
-      k.writeProxyTheme(install, preset.primary)
-      primaryIntent.stringSettings.CurrentThemeName = k.PROXY_THEME
+      // The proxy's name mirrors the preset's theme so overlays and the in-game
+      // menu read something meaningful - but the name is the game's selection
+      // key, bound in memory at launch, so it can only move while the game is
+      // CLOSED (see the PROXY_THEME notes in kovaaks.js). Running: rewrite the
+      // contents under the EXISTING name, and queue the new one for the quit
+      // flush. Closed: both move together, right now.
+      const wantName = k.proxyThemeName(preset.primary.stringSettings?.CurrentThemeName)
+      k.writeProxyTheme(install, preset.primary, running ? k.readProxyName(install) : wantName)
+      primaryIntent.stringSettings.CurrentThemeName = wantName
+      // The flush re-labels the file to match; without this the queued
+      // CurrentThemeName would land on a proxy still carrying the old name and
+      // the game would boot with an empty theme selection.
+      primaryIntent.proxyName = wantName
     } else {
       // Nothing visibly differs, so don't touch theme SELECTION: the proxy file
       // still holds whatever the last apply wrote, and pinning the game to it

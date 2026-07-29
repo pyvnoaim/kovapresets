@@ -325,7 +325,7 @@ function showHelp() {
       <ul>
         <li><b>Presets</b> save your KovaaK's look &amp; sound: crosshair, theme, sounds, HUD, sens. Applying writes the game's own settings files.</li>
         <li><b>Going live:</b> crosshair and combat sounds apply on the next scenario load. Theme: open the game's settings once. Sens, DPI and the rest land when the game quits or starts.</li>
-        <li><b>Once:</b> select the <b>!KovaPreset</b> theme in-game so themes can swap live.</li>
+        <li><b>Once:</b> select the theme starting <b>!KovaPreset</b> in-game so themes can swap live.</li>
         <li><b>Re-enter now</b> reloads your scenario via Steam so changes kick in. The run auto-starts, press your reset bind when ready.</li>
         <li><b>Hotkeys</b> (bolt icon) work even in-game, and stay alive in the tray when you close the window.</li>
         <li><b>Restore original setup</b> reverts everything back to before KovaPresets.</li>
@@ -502,7 +502,8 @@ function showWizard() {
         proxy theme, <b>!KovaPreset</b>, that you select in-game <b>once</b> - after that, theme
         presets apply live when you open the settings screen.</p>
         <p><b>Do this:</b> create the proxy below, then in KovaaK's go to
-        <b>Settings → Game → Theme</b> and pick <b>!KovaPreset</b> (it sorts to the top).</p>
+        <b>Settings → Game → Theme</b> and pick the entry starting <b>!KovaPreset</b> (it sorts to
+        the top; once a preset is applied it also names the theme it mirrors).</p>
         <p class="wiz-arm-status muted">Not created yet.</p>
       </div>
       <div class="wiz-actions"><button class="wiz-back">← Back</button>
@@ -609,8 +610,26 @@ function toast(msg, kind = '', ms = 3600, action = null) {
 
 // short display accessors - tolerant of both the nested snapshot shape and the
 // older flat one so presets captured before the refactor still read.
-const themeName = (snap) =>
-  snap?.primary?.stringSettings?.CurrentThemeName || snap?.primary?.CurrentThemeName || ''
+// The proxy names itself "!KovaPreset - <mirrored theme>" so overlays and the
+// in-game menu read something meaningful, so an === test against the bare name
+// no longer recognises it (and 'KovaPreset' predates the '!' prefix entirely).
+// Mirrors isProxyThemeName/mirroredThemeName in core/kovaaks.js - the renderer
+// can't require() it, so any change to the naming has to land in both.
+const PROXY_BASE = '!KovaPreset'
+const PROXY_SEP = ' - '
+const isProxyName = (raw) =>
+  raw === PROXY_BASE || raw === 'KovaPreset' || String(raw || '').startsWith(PROXY_BASE + PROXY_SEP)
+const mirroredName = (raw) =>
+  String(raw || '').startsWith(PROXY_BASE + PROXY_SEP)
+    ? String(raw).slice((PROXY_BASE + PROXY_SEP).length)
+    : ''
+
+// Presets captured while the proxy was selected store the PROXY's name, so
+// unwrap it - a preset row reading "!KovaPreset - Pink" should just say "Pink".
+const themeName = (snap) => {
+  const raw = snap?.primary?.stringSettings?.CurrentThemeName || snap?.primary?.CurrentThemeName || ''
+  return mirroredName(raw) || (isProxyName(raw) ? '' : raw)
+}
 const crosshair = (snap) => snap?.weapon?.CrosshairFile || ''
 // display-only: "OPDot.png" reads better as "OPDot" (files keep the extension)
 const noExt = (f) => String(f || '').replace(/\.[a-z0-9]+$/i, '')
@@ -667,10 +686,7 @@ const NON_THEME_KEY =
 // indices, two booleans) instead of comparing them against stale settings.
 function primaryMatches(preset, active, themeOnly) {
   const raw = active.primary?.stringSettings?.CurrentThemeName || ''
-  const proxy =
-    (raw === '!KovaPreset' || raw === 'KovaPreset') && current?.proxyPrimary
-      ? current.proxyPrimary
-      : null
+  const proxy = isProxyName(raw) && current?.proxyPrimary ? current.proxyPrimary : null
   for (const section of Object.keys(preset.primary || {})) {
     if (!section.match(/Settings$/)) continue
     for (const [key, val] of Object.entries(preset.primary[section] || {})) {
@@ -746,11 +762,15 @@ function summaryText(preset) {
 // matches the active state (theme fields, not the label).
 function activeThemeLabel(active, presets) {
   const raw = active.primary?.stringSettings?.CurrentThemeName || ''
-  if (raw !== '!KovaPreset' && raw !== 'KovaPreset') return { name: raw, liveSwap: false }
+  if (!isProxyName(raw)) return { name: raw, liveSwap: false }
   const match = (presets || []).find((p) => primaryMatches(p, active, true))
   // liveSwap: the game is on the proxy theme, so theme applies swap without a
   // game restart (shown as a sub-line, not glued to the name)
-  const real = match ? themeName(match) : ''
+  //
+  // Prefer the matched preset over the name the proxy carries: that name only
+  // moves while the game is closed, so mid-session it still reads as whatever
+  // was applied at launch. Matching on theme FIELDS tracks live swaps.
+  const real = match ? themeName(match) : mirroredName(raw)
   return { name: real || 'custom', liveSwap: true }
 }
 
@@ -1502,7 +1522,7 @@ window.kova.onHotkeyApplied(({ name, theme, weaponChanged, followUp, launchOnly 
   else if (weaponChanged) bits.push('crosshair/sounds live on scenario re-entry')
   if (!(followUp?.mode === 'restart' && followUp.ok)) {
     if (theme === 'live') bits.push('theme applies when you open settings')
-    else if (theme === 'arming') bits.push('select !KovaPreset in the theme menu once')
+    else if (theme === 'arming') bits.push('select the !KovaPreset theme in the menu once')
     // hotkey applies happen mid-session, so this is exactly where a silently
     // unapplied sens would bite - name the value so it can be typed in-game
     if (launchOnly?.length)
