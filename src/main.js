@@ -16,6 +16,8 @@ const { pathToFileURL } = require('node:url')
 const { execFile } = require('node:child_process')
 const k = require('./core/kovaaks')
 const store = require('./core/presets')
+const logger = require('./core/log')
+const log = logger.log
 
 const STEAM_APP_ID = '824270' // KovaaK's
 
@@ -104,6 +106,11 @@ function createWindow() {
     },
   })
   win.removeMenu()
+  // Renderer errors land in the log too - a blank preset list in a user report
+  // otherwise leaves nothing to go on.
+  win.webContents.on('console-message', (_e, level, message, line, sourceId) => {
+    if (level >= 3) log('renderer error', message, `${String(sourceId).split(/[\\/]/).pop()}:${line}`)
+  })
   // The preload bridge is attached to the WINDOW, not the page, so anything
   // that loads here inherits it. The app has no in-app links or popups, so
   // pinning the window to index.html costs nothing and means one escaping slip
@@ -267,11 +274,14 @@ async function restartGameInner() {
   // game only appends to, but resolving it up front keeps the ordering obvious.
   const [scenario] = install ? k.recentScenariosFromStats(install) : []
   await closeGame()
-  if (!(await waitForExit()))
+  if (!(await waitForExit())) {
+    log('restart: game did not close within timeout')
     return { ok: false, error: "KovaaK's didn't close - it may be showing a prompt. Close it and the queued settings apply automatically." }
+  }
   gameRunningCache = false
   // now that the game is gone, the queued sens/DPI/theme can actually land
   flushPendingIfPossible()
+  log('restart: relaunching', scenario || '(no scenario)')
   if (!scenario) {
     shell.openExternal(`steam://run/${STEAM_APP_ID}`)
     return { ok: true, scenario: null }
@@ -314,7 +324,9 @@ async function runApplyFollowUp(result) {
 
 // ---- pending (game-owned files queued while the game runs) --------------------
 function setPending(pending) {
-  fs.writeFileSync(pendingFile(), JSON.stringify(pending))
+  // atomic: pending.json holds the whole queued intent - a torn write would
+  // drop it, or worse flush half of it into the game's files on quit
+  k.writeFileAtomic(pendingFile(), JSON.stringify(pending))
 }
 function readPending() {
   try {
@@ -333,10 +345,19 @@ function clearPending() {
 // read the settings files unguarded, and a Steam "verify files" or a moved
 // library makes them vanish mid-session. Swallow and retry next tick - pending
 // stays on disk, so nothing is lost.
+let lastFlushError = ''
 function flushPendingIfPossible() {
   try {
-    return flushPending()
-  } catch {
+    const r = flushPending()
+    lastFlushError = ''
+    return r
+  } catch (e) {
+    // log each DISTINCT failure once, not once per 4s tick for hours
+    const msg = String(e?.message || e)
+    if (msg !== lastFlushError) {
+      lastFlushError = msg
+      log('flush failed (will retry)', e)
+    }
     return false
   }
 }
@@ -356,7 +377,7 @@ function flushPending() {
   if (!install) return false
   if (pending.primaryRaw != null)
     // undo restore: put the exact captured file back
-    fs.writeFileSync(
+    k.writeFileAtomic(
       path.join(install, 'Saved', 'SaveGames', 'PrimaryUserSettings.json'),
       pending.primaryRaw
     )
@@ -381,8 +402,9 @@ function flushPending() {
   if (pending.ui != null) k.applyUi(install, pending.ui)
   // re-assert the weapon intent the game's exit-write may have reverted
   if (pending.weaponRaw != null)
-    fs.writeFileSync(path.join(install, 'Saved', 'SaveGames', 'weaponsettings.ini'), pending.weaponRaw)
+    k.writeFileAtomic(path.join(install, 'Saved', 'SaveGames', 'weaponsettings.ini'), pending.weaponRaw)
   else if (pending.weapon) k.applyWeapon(install, pending.weapon)
+  log('pending flushed', Object.keys(pending))
   clearPending()
   if (win && !win.isDestroyed()) win.webContents.send('changed')
   return true
@@ -423,10 +445,10 @@ function deactivatePresets() {
   // weapon + proxy theme are safe to write any time
   const weapon = read('weapon.bak')
   if (weapon != null)
-    fs.writeFileSync(path.join(install, 'Saved', 'SaveGames', 'weaponsettings.ini'), weapon)
+    k.writeFileAtomic(path.join(install, 'Saved', 'SaveGames', 'weaponsettings.ini'), weapon)
   const proxy = read('proxy.bak')
   if (proxy != null)
-    fs.writeFileSync(
+    k.writeFileAtomic(
       path.join(install, 'Saved', 'SaveGames', 'Themes', `${k.PROXY_THEME}.json`),
       proxy
     )
@@ -450,7 +472,7 @@ function deactivatePresets() {
   } else {
     clearPending() // same reasoning - drop any not-yet-flushed preset intents
     if (primaryRaw != null)
-      fs.writeFileSync(
+      k.writeFileAtomic(
         path.join(install, 'Saved', 'SaveGames', 'PrimaryUserSettings.json'),
         primaryRaw
       )
@@ -458,6 +480,7 @@ function deactivatePresets() {
     if (ui != null) k.applyUi(install, ui)
   }
   fs.rmSync(dir, { recursive: true, force: true }) // restored - next apply recaptures
+  log('restored original setup', { running, queued })
   return { ok: true, queued }
 }
 
@@ -489,14 +512,16 @@ function doApplyPreset(preset) {
   if (wantDpi !== undefined && changedNum(wantDpi, active.primary?.integerSettings?.DPI))
     launchOnly.push({ field: 'DPI', value: Number(wantDpi) })
 
-  // primaryDiffers compares against PrimaryUserSettings.json ON DISK, which is
-  // only the truth while the game is CLOSED - a running game owns those fields in
-  // memory and rewrites the file from them. So it answers "is there a change to
-  // report", NOT "is there anything to write": a preset whose sens already matches
-  // disk still has to be re-asserted after the game quits, or the game's own
-  // rewrite puts the launch-time value back and the pick silently does nothing.
-  // That was the other half of the intermittent sens - the half a fresh
-  // running-check can't fix.
+  // primaryDiffers compares against PrimaryUserSettings.json ON DISK - except for
+  // theme fields while the proxy is selected, which it compares against the proxy
+  // file, because that's what the game is actually rendering (see the note there).
+  // The settings file is only the truth while the game is CLOSED - a running game
+  // owns those fields in memory and rewrites the file from them. So this answers
+  // "is there a change to report", NOT "is there anything to write": a preset
+  // whose sens already matches disk still has to be re-asserted after the game
+  // quits, or the game's own rewrite puts the launch-time value back and the pick
+  // silently does nothing. That was the other half of the intermittent sens - the
+  // half a fresh running-check can't fix.
   const primaryChanged = k.primaryDiffers(install, preset.primary)
   let primaryIntent = null
   if (preset.primary) {
@@ -517,9 +542,11 @@ function doApplyPreset(preset) {
       // the game would boot with an empty theme selection.
       primaryIntent.proxyName = wantName
     } else {
-      // Nothing visibly differs, so don't touch theme SELECTION: the proxy file
-      // still holds whatever the last apply wrote, and pinning the game to it
-      // here would hand the player a different preset's theme. This intent
+      // Nothing visibly differs, so don't touch theme SELECTION. On the proxy
+      // that's because it already renders this preset's theme (the check reads
+      // the proxy file, not the stale settings one); off it, the proxy still
+      // holds whatever the last apply wrote and pinning the game to it here
+      // would hand the player a different preset's theme. Either way this intent
       // exists purely to survive the game's exit rewrite.
       delete primaryIntent.stringSettings.CurrentThemeName
     }
@@ -564,7 +591,9 @@ function doApplyPreset(preset) {
   // `queued` = game-owned fields (theme/sens/DPI/palette/HUD) waiting on the game
   // to close. Only a full restart makes those live, so it gates that escalation.
   const queued = running && !!(wants.primary || wants.palette != null || wants.ui != null)
-  return { weaponChanged, theme, running, queued, launchOnly }
+  const result = { weaponChanged, theme, running, queued, launchOnly }
+  log('apply', preset.name || '(unnamed)', result)
+  return result
 }
 
 // ---- global hotkeys -----------------------------------------------------------
@@ -596,6 +625,113 @@ function registerHotkeys() {
       // invalid accelerator string - ignore, the UI validates on record
     }
   }
+}
+
+// ---- scenario auto-switching ----------------------------------------------------
+// The game drops a stats CSV the moment a run ends, and the score screen sits
+// between runs - so that's the window where a preset assigned to the upcoming
+// scenario (preset.scenarios) can land, and the scenario load that follows
+// re-reads weaponsettings.ini and picks it up by itself. In a playlist the
+// upcoming scenario is derived from the playlist definition + this session's
+// CSVs (see upcomingScenario); outside one it's the scenario just played.
+let statsWatcher = null
+const seenCsv = new Map() // filename -> first-seen ms; fs.watch fires several events per file
+
+function armStatsWatcher() {
+  const install = findInstall()
+  const dir = install ? path.join(install, 'stats') : null
+  if (statsWatcher) {
+    if (dir && statsWatcher.kovaDir === dir) return
+    statsWatcher.close()
+    statsWatcher = null
+  }
+  if (!dir || !fs.existsSync(dir)) return
+  try {
+    const w = fs.watch(dir, (_event, filename) => {
+      try {
+        onStatsCsv(String(filename || ''))
+      } catch (e) {
+        log('auto-switch failed', e)
+      }
+    })
+    w.kovaDir = dir
+    w.on('error', () => {
+      // stats folder vanished mid-session (moved library, Steam verify) - drop
+      // the watcher; the 4s tick re-arms it when the folder is back
+      try {
+        w.close()
+      } catch {}
+      if (statsWatcher === w) statsWatcher = null
+    })
+    statsWatcher = w
+  } catch {
+    statsWatcher = null
+  }
+}
+
+function onStatsCsv(filename) {
+  const parsed = k.statsFileScenario(filename)
+  if (!parsed) return
+  // Only a CSV whose filename timestamp is fresh counts as a run ending NOW.
+  // The watcher also fires for OLD files - an AV sweep, Steam Cloud sync or a
+  // "verify integrity" touches thousands of them - and each would otherwise
+  // read as a finished run: log spam at best, a spurious apply at worst.
+  const now = Date.now()
+  if (Math.abs(now - parsed.ts) > 10 * 60_000) return
+  // one new CSV -> several watch events; first one wins, the rest drop
+  for (const [f, at] of seenCsv) if (now - at > 5 * 60_000) seenCsv.delete(f)
+  if (seenCsv.has(filename)) return
+  seenCsv.set(filename, now)
+
+  const install = findInstall()
+  if (!install) return
+  const presets = store.load(userData())
+  // log every detected run even with no rules - "did it see my run at all?" is
+  // the first question when auto-apply seems dead
+  if (!presets.some((p) => Array.isArray(p.scenarios) && p.scenarios.length)) {
+    log('run ended', parsed.scenario, '(no auto-apply rules)')
+    return
+  }
+  const upcoming = k.upcomingScenario(install, parsed.scenario)
+  const lower = String(upcoming).toLowerCase()
+  const preset = presets.find((p) =>
+    (p.scenarios || []).some((s) => String(s).toLowerCase() === lower)
+  )
+  log('run ended', parsed.scenario, '- upcoming', upcoming, preset ? `-> ${preset.name}` : '(no preset assigned)')
+  if (!preset) return
+  const result = doApplyPreset(preset)
+  // NEVER a follow-up here: the player sits on the score screen mid-playlist,
+  // and a scenario re-enter or restart would hijack the playlist's own
+  // navigation. The scenario load that's about to happen picks the fields up.
+  //
+  // Notify only when something actually changed - grinding the same scenario
+  // re-asserts the same preset every run, and a toast per run is pure noise.
+  if ((result.weaponChanged || result.queued) && win && !win.isDestroyed())
+    win.webContents.send('auto-applied', { name: preset.name, scenario: upcoming, ...result })
+}
+
+// Scenario-name suggestions for the assignment UI: the loaded playlist's list
+// plus recently played ones. Cached like listOptions - it's on the state poll.
+let scenarioSuggestCache = null // { install, at, value }
+function scenarioSuggestions(install, rescan) {
+  if (
+    rescan ||
+    !scenarioSuggestCache ||
+    scenarioSuggestCache.install !== install ||
+    Date.now() - scenarioSuggestCache.at > OPTIONS_TTL_MS
+  ) {
+    const pl = k.readPlaylistInProgress(install)
+    const names = [
+      ...(pl ? pl.scenarios.map((s) => s.name) : []),
+      ...k.recentScenariosFromStats(install, 40),
+    ]
+    scenarioSuggestCache = {
+      install,
+      at: Date.now(),
+      value: { playlist: pl ? pl.name : '', names: [...new Set(names)] },
+    }
+  }
+  return scenarioSuggestCache.value
 }
 
 // ---- presets migration (v1 flat shape -> nested) ------------------------------
@@ -673,6 +809,10 @@ function trayMenu() {
       ? [{ label: `Restart to update to ${updateReady}`, click: () => installUpdate() }]
       : []),
     { label: 'Open KovaPresets', click: showWindow },
+    // support surface: "sens didn't apply" reports come with a file to look at
+    ...(logger.logPath()
+      ? [{ label: 'Open log file', click: () => shell.showItemInFolder(logger.logPath()) }]
+      : []),
     { label: 'Quit', click: () => app.quit() },
   ])
 }
@@ -707,12 +847,15 @@ function readActiveMerged(install) {
 
 ipcMain.handle('state', (_e, opts) => {
   const install = findInstall(opts?.rescan)
+  if (opts?.rescan) armStatsWatcher()
   if (!install) return { install: null }
   const { active, pending } = readActiveMerged(install)
   return {
     install,
     gameRunning: gameRunning(),
     active,
+    // playlist + recent scenarios, for the auto-apply assignment UI
+    scenarios: scenarioSuggestions(install, opts?.rescan),
     // What the proxy theme file actually holds - the renderer matches theme
     // identity against this while the game is on the proxy, because the game
     // rewrites PrimaryUserSettings.json from launch-time memory and its theme
@@ -869,6 +1012,7 @@ ipcMain.handle('presets:duplicate', (_e, id) => {
     copy.id = store.newId()
     copy.name = `${copy.name} copy`
     delete copy.hotkey // hotkeys stay unique to the original
+    delete copy.scenarios // ditto - one scenario auto-applies one preset
     presets.splice(i + 1, 0, copy)
     store.save(userData(), presets)
   }
@@ -878,6 +1022,33 @@ ipcMain.handle('presets:duplicate', (_e, id) => {
 ipcMain.handle('presets:reorder', (_e, orderedIds) => {
   const presets = store.load(userData())
   presets.sort((a, b) => orderedIds.indexOf(a.id) - orderedIds.indexOf(b.id))
+  store.save(userData(), presets)
+  return presets
+})
+
+// Assign the scenarios a preset auto-applies for. One scenario drives one
+// preset, so assigning it here steals it from any other preset (the hotkey
+// rule). Names arrive from filenames or typing - plain strings, capped.
+ipcMain.handle('presets:setScenarios', (_e, id, scenarios) => {
+  // dedupe case-insensitively - matching is case-insensitive too, so "Pasu"
+  // and "pasu" would otherwise be two stored entries driving one scenario
+  const byLower = new Map()
+  for (const s of Array.isArray(scenarios) ? scenarios : []) {
+    const name = String(s).replace(/[\r\n\t]+/g, ' ').trim().slice(0, 120)
+    if (name && !byLower.has(name.toLowerCase())) byLower.set(name.toLowerCase(), name)
+  }
+  const clean = [...byLower.values()].slice(0, 50)
+  const lower = new Set(clean.map((s) => s.toLowerCase()))
+  const presets = store.load(userData())
+  for (const p of presets) {
+    if (p.id === id) {
+      if (clean.length) p.scenarios = clean
+      else delete p.scenarios
+    } else if (p.scenarios) {
+      p.scenarios = p.scenarios.filter((s) => !lower.has(String(s).toLowerCase()))
+      if (!p.scenarios.length) delete p.scenarios
+    }
+  }
   store.save(userData(), presets)
   return presets
 })
@@ -963,8 +1134,10 @@ ipcMain.handle('presets:export', async (_e, id) => {
     filters: [{ name: 'KovaPreset', extensions: ['json'] }],
   })
   if (canceled || !filePath) return { ok: false, canceled: true }
-  // ids are local, hotkeys are personal - neither belongs in a shared file
-  const out = chosen.map(({ id: _id, hotkey: _hk, ...rest }) => rest)
+  // ids are local, hotkeys and scenario assignments are personal - none of
+  // them belong in a shared file (imports also ignore them; an imported preset
+  // must never start applying itself)
+  const out = chosen.map(({ id: _id, hotkey: _hk, scenarios: _sc, ...rest }) => rest)
   fs.writeFileSync(filePath, JSON.stringify({ kovapreset: 1, presets: out }, null, 2))
   return { ok: true, count: out.length }
 })
@@ -1034,6 +1207,7 @@ function initAutoUpdate() {
   autoUpdater.autoInstallOnAppQuit = true
   autoUpdater.on('update-downloaded', (info) => {
     updateReady = info.version
+    log('update downloaded', info.version)
     // The tray is the only surface guaranteed to be visible - the window is
     // usually hidden when this fires, which is exactly how a staged update used
     // to go unmentioned indefinitely.
@@ -1058,12 +1232,18 @@ function installUpdate() {
 ipcMain.handle('update:install', () => installUpdate())
 
 app.whenReady().then(() => {
+  logger.init(userData())
+  log('---- app start', app.getVersion(), app.isPackaged ? 'packaged' : 'dev', '----')
   createWindow()
   createTray()
   initAutoUpdate()
   flushPendingIfPossible()
   registerHotkeys()
-  setInterval(flushPendingIfPossible, 4000)
+  armStatsWatcher()
+  setInterval(() => {
+    flushPendingIfPossible()
+    armStatsWatcher() // no-op while armed; re-arms after a vanished stats folder
+  }, 4000)
   setInterval(pollGameRunning, 3000)
   // legacy storage from the removed per-apply undo system
   fs.rmSync(path.join(userData(), 'backups'), { recursive: true, force: true })

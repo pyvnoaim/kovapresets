@@ -468,6 +468,7 @@ button.danger:hover {
   color: var(--fg-muted);
 }
 .field input[type='text'],
+.scen-input,
 .field select {
   font: inherit;
   color: var(--fg);
@@ -479,6 +480,7 @@ button.danger:hover {
   min-width: 0;
 }
 .field input[type='text']:focus,
+.scen-input:focus,
 .field select:focus {
   border-color: var(--border-strong);
 }
@@ -1796,4 +1798,96 @@ button.play:hover {
     opacity: 0;
     transform: translate(-50%, 8px);
   }
+}
+
+/* ---- scenario auto-apply ------------------------------------------------------ */
+/* Row button lights up when the preset has scenarios assigned, with a count so
+   a glance tells "this one drives part of my playlist". */
+.preset .scen {
+  position: relative;
+}
+.preset .scen.scen-on {
+  opacity: 1;
+  color: var(--accent);
+}
+.preset .scen.scen-on:hover {
+  color: var(--accent);
+}
+.scen-count {
+  position: absolute;
+  top: -3px;
+  right: -4px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 13px;
+  text-align: center;
+}
+.modal-scen {
+  width: min(520px, calc(100vw - 48px));
+}
+.modal-scen h3 {
+  font-family: 'Fraunces', Georgia, serif;
+  font-size: 17px;
+  margin-bottom: 8px;
+}
+.scen-intro {
+  font-size: 13px;
+  color: var(--fg-subtle);
+  line-height: 1.45;
+}
+.scen-playlist {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.scen-add {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.scen-add .scen-input {
+  flex: 1;
+}
+.scen-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.scen-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 5px 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+}
+.scen-x {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  background: none;
+  border-radius: var(--radius-pill);
+  color: var(--fg-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.scen-x:hover {
+  color: var(--danger);
+}
+.scen-none {
+  font-size: 12px;
+  color: var(--fg-muted);
 }

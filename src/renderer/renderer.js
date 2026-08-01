@@ -62,6 +62,8 @@ const ICON = {
   warn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.5 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.5a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>',
   cross:
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+  target:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>',
 }
 const STATUS_ICON = { ok: ICON.check, warn: ICON.warn, fail: ICON.cross }
 
@@ -328,6 +330,7 @@ function showHelp() {
         <li><b>Once:</b> select the theme starting <b>!KovaPreset</b> in-game so themes can swap live.</li>
         <li><b>Re-enter now</b> reloads your scenario via Steam so changes kick in. The run auto-starts, press your reset bind when ready.</li>
         <li><b>Hotkeys</b> (bolt icon) work even in-game, and stay alive in the tray when you close the window.</li>
+        <li><b>Auto-apply</b> (target icon) binds a preset to scenarios: finish a run, and if one of them is up next - playlists included - it applies itself before the load.</li>
         <li><b>Restore original setup</b> reverts everything back to before KovaPresets.</li>
         <li><b>One rule:</b> while a preset is applied, change these settings here, not in KovaaK's, or the game overwrites them.</li>
       </ul>
@@ -350,6 +353,102 @@ function showHelp() {
   document.addEventListener('keydown', onKey, true)
   document.body.appendChild(wrap)
   wrap.querySelector('.m-ok').focus()
+}
+
+// ---- scenario auto-apply assignment ---------------------------------------------
+// Assign the scenarios that auto-apply this preset: when a run ends and one of
+// them is up next (playlist-aware - main.js derives "next" from the loaded
+// playlist + this session's stats CSVs), the preset applies itself and the
+// scenario load picks it up. Saving steals a scenario already assigned to
+// another preset, hotkey-style.
+function openScenarios(preset) {
+  const assigned = [...(preset.scenarios || [])]
+  const sugg = current?.scenarios || { playlist: '', names: [] }
+  const wrap = document.createElement('div')
+  wrap.className = 'modal-backdrop'
+  wrap.innerHTML = `
+    <div class="modal modal-scen" role="dialog" aria-modal="true">
+      <h3>Auto-apply “${esc(preset.name)}”</h3>
+      <p class="scen-intro">When a run ends and one of these scenarios is up next - mid-playlist or grinding it - this preset applies by itself, and the scenario load makes it live. No hands needed.</p>
+      ${sugg.playlist ? `<p class="scen-playlist">Loaded playlist: <b>${esc(sugg.playlist)}</b> - its scenarios are in the suggestions.</p>` : ''}
+      <div class="scen-add">
+        <input class="scen-input" type="text" list="scen-sugg" placeholder="Type or pick a scenario…" spellcheck="false" />
+        <datalist id="scen-sugg"></datalist>
+        <button class="scen-add-btn">Add</button>
+      </div>
+      <div class="scen-chips"></div>
+      <div class="modal-actions">
+        <button class="m-cancel">Cancel</button>
+        <button class="m-ok primary">Save</button>
+      </div>
+    </div>`
+  const input = wrap.querySelector('.scen-input')
+  const chips = wrap.querySelector('.scen-chips')
+  const datalist = wrap.querySelector('#scen-sugg')
+  const renderSugg = () => {
+    const taken = new Set(assigned.map((s) => s.toLowerCase()))
+    datalist.innerHTML = sugg.names
+      .filter((n) => !taken.has(n.toLowerCase()))
+      .map((n) => `<option value="${esc(n)}"></option>`)
+      .join('')
+  }
+  const renderChips = () => {
+    chips.innerHTML = assigned.length
+      ? assigned
+          .map(
+            (s, i) =>
+              `<span class="scen-chip">${esc(s)}<button class="scen-x" data-i="${i}" aria-label="Remove">×</button></span>`
+          )
+          .join('')
+      : '<span class="scen-none">No scenarios yet - this preset only applies by hand.</span>'
+    for (const btn of chips.querySelectorAll('.scen-x'))
+      btn.addEventListener('click', () => {
+        assigned.splice(Number(btn.dataset.i), 1)
+        renderChips()
+        renderSugg()
+      })
+  }
+  const add = () => {
+    const name = input.value.trim()
+    if (!name) return
+    if (!assigned.some((s) => s.toLowerCase() === name.toLowerCase())) assigned.push(name)
+    input.value = ''
+    renderChips()
+    renderSugg()
+    input.focus()
+  }
+  const done = () => {
+    document.removeEventListener('keydown', onKey, true)
+    wrap.remove()
+  }
+  const save = async () => {
+    current.presets = await window.kova.setScenarios(preset.id, assigned)
+    done()
+    renderPresets(current.presets, current.active)
+    toast(
+      assigned.length
+        ? `Auto-apply saved - <b>${esc(preset.name)}</b> takes over for ${assigned.length} scenario${assigned.length === 1 ? '' : 's'}.`
+        : `Auto-apply cleared for <b>${esc(preset.name)}</b>.`,
+      'ok'
+    )
+  }
+  const onKey = (e) => {
+    e.stopPropagation()
+    if (e.key === 'Escape') done()
+    // Enter in the input adds; Enter elsewhere saves
+    if (e.key === 'Enter') document.activeElement === input ? add() : save()
+  }
+  wrap.addEventListener('mousedown', (e) => {
+    if (e.target === wrap) done()
+  })
+  wrap.querySelector('.scen-add-btn').addEventListener('click', add)
+  wrap.querySelector('.m-cancel').addEventListener('click', done)
+  wrap.querySelector('.m-ok').addEventListener('click', save)
+  document.addEventListener('keydown', onKey, true)
+  document.body.appendChild(wrap)
+  renderChips()
+  renderSugg()
+  input.focus()
 }
 
 // ---- health check ---------------------------------------------------------------
@@ -874,6 +973,13 @@ function renderPresets(presets, active) {
         <button class="edit quiet" data-tip="Edit" aria-label="Edit preset">${ICON.pencil}</button>
         <button class="dup quiet" data-tip="Duplicate" aria-label="Duplicate preset">${ICON.copy}</button>
         <button class="exp quiet" data-tip="Export to a file (share it)" aria-label="Export preset">${ICON.share}</button>
+        <button class="scen quiet${preset.scenarios?.length ? ' scen-on' : ''}" data-tip="${
+          preset.scenarios?.length
+            ? `Auto-applies for: ${esc(preset.scenarios.join(', '))}`
+            : 'Auto-apply for scenarios…'
+        }" aria-label="Auto-apply scenarios">${ICON.target}${
+          preset.scenarios?.length ? `<span class="scen-count">${preset.scenarios.length}</span>` : ''
+        }</button>
         <button class="del quiet" data-tip="Delete" aria-label="Delete preset">${ICON.trash}</button>
         <button class="hotkey${preset.hotkey ? ' has-key' : ''}" data-tip="${preset.hotkey ? `${esc(preset.hotkey)} - click to change, Backspace clears` : 'Set global hotkey'}">
           ${preset.hotkey ? esc(preset.hotkey) : ICON.key}
@@ -913,6 +1019,7 @@ function renderPresets(presets, active) {
       })
     }
     row.querySelector('.edit').addEventListener('click', () => openEditor(preset))
+    row.querySelector('.scen').addEventListener('click', () => openScenarios(preset))
 
     row.querySelector('.hotkey').addEventListener('click', (e) => recordHotkey(preset, e.currentTarget))
     row.querySelector('.dup').addEventListener('click', async () => {
@@ -1531,6 +1638,15 @@ window.kova.onHotkeyApplied(({ name, theme, weaponChanged, followUp, launchOnly 
       )
   }
   toast(`Hotkey applied <b>${esc(name)}</b>${bits.length ? ' - ' + bits.join(', ') : ''}.`, 'ok', 6000)
+})
+// A run ended and the upcoming scenario has a preset assigned - main.js already
+// applied it (crosshair/sounds land when the scenario loads; no follow-up runs).
+window.kova.onAutoApplied(({ name, scenario, launchOnly }) => {
+  refresh()
+  const extra = launchOnly?.length
+    ? ` (${esc(launchOnly.map((f) => `${f.field} ${round2(f.value)}`).join(' & '))} still needs a restart)`
+    : ''
+  toast(`Up next <b>${esc(scenario)}</b> - auto-applied <b>${esc(name)}</b>${extra}.`, 'ok', 6000)
 })
 
 // Boot: settle settings (incl. onboarded) and populate the UI before anything

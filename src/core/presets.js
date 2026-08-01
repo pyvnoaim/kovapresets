@@ -3,6 +3,7 @@
 // write, in readActive()'s shape, plus an id + name.
 const fs = require('node:fs')
 const path = require('node:path')
+const { writeFileAtomic } = require('./fsatomic')
 
 function storeFile(userDataDir) {
   return path.join(userDataDir, 'presets.json')
@@ -19,7 +20,9 @@ function load(userDataDir) {
 }
 
 function save(userDataDir, presets) {
-  fs.writeFileSync(storeFile(userDataDir), JSON.stringify({ presets }, null, 2))
+  // atomic: this file IS the user's preset collection - a torn write here (app
+  // killed mid-save, disk hiccup) would lose every preset at once
+  writeFileAtomic(storeFile(userDataDir), JSON.stringify({ presets }, null, 2))
 }
 
 // Deterministic-ish id without pulling a uuid dep; Date.now + counter is fine for

@@ -43,6 +43,9 @@ untouched.
 Beyond switching presets:
 
 - **Global hotkeys** — bind a preset to a key combo that works while you're in game.
+- **Scenario auto-apply** — assign scenarios to a preset (target icon) and it applies
+  itself the moment a run ends and one of them is up next. Playlist-aware: grinding a
+  benchmark playlist switches your crosshair per scenario, hands-off.
 - **Live theme swapping** — select the bundled `!KovaPreset` theme in game once, and
   theme changes apply without restarting.
 - **One-tap scenario re-enter** — reloads your current scenario through Steam so a

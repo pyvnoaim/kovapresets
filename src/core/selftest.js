@@ -111,6 +111,129 @@ console.log('import validation: ok')
   console.log('weaponsettings sections + BOM: ok')
 }
 
+// primaryDiffers while the game is on the proxy theme - synthetic install, so it
+// can stage the exact mid-session state: the settings file stale on the LAUNCH
+// theme (the game rewrites it from launch-time memory) while the proxy file
+// holds what a live apply put on screen. Re-applying the launch preset must
+// read as a change, or the proxy is never rewritten and the player keeps the
+// previous preset's theme (the "going back to the preset I launched with does
+// nothing" bug).
+{
+  const fs2 = require('node:fs')
+  const os2 = require('node:os')
+  const path2 = require('node:path')
+  const root = fs2.mkdtempSync(path2.join(os2.tmpdir(), 'kova-selftest-'))
+  const sg = path2.join(root, 'Saved', 'SaveGames')
+  fs2.mkdirSync(path2.join(sg, 'Themes'), { recursive: true })
+  fs2.writeFileSync(path2.join(sg, 'weaponsettings.ini'), '﻿CrosshairFile=dot.png\n')
+
+  const themeX = { WallColor: [0.1, 0.1, 0.1] }
+  const themeA = { WallColor: [0.9, 0, 0] }
+  const primaryOf = (theme, name) => ({
+    stringSettings: { CurrentThemeName: name },
+    floatSettings: { XSens: 0.5 },
+    integerSettings: { DPI: 3200 },
+    vectorSettings: theme,
+  })
+  // the on-disk settings file nests managed fields under `<PREFIX>::<name>`
+  const PREFIX = {
+    stringSettings: 'EStringSettingId',
+    floatSettings: 'EFloatSettingId',
+    integerSettings: 'EIntegerSettingId',
+    vectorSettings: 'EVectorSettingId',
+  }
+  const writeSettings = (primary) => {
+    const out = {}
+    for (const [section, fields] of Object.entries(primary)) {
+      out[section] = {}
+      for (const [name, val] of Object.entries(fields)) out[section][`${PREFIX[section]}::${name}`] = val
+    }
+    fs2.writeFileSync(path2.join(sg, 'PrimaryUserSettings.json'), JSON.stringify(out, null, '\t'))
+  }
+
+  const presetX = primaryOf(themeX, 'X')
+  const presetA = primaryOf(themeA, 'A')
+  writeSettings(primaryOf(themeX, '!KovaPreset - X')) // stale: still the launch theme
+  k.writeProxyTheme(root, presetA, '!KovaPreset - X') // live: the last mid-session apply
+  assert.ok(k.proxyThemeSelected(root))
+  assert.equal(k.primaryDiffers(root, presetX), true, 'returning to the launch preset must count as a change')
+  assert.equal(k.primaryDiffers(root, presetA), false, 're-applying what the proxy renders must be a no-op')
+  // non-theme fields have no live route - they still compare against the settings file
+  const sensBump = JSON.parse(JSON.stringify(presetA))
+  sensBump.floatSettings.XSens = 0.9
+  assert.equal(k.primaryDiffers(root, sensBump), true, 'sens still compares against the settings file')
+  // off the proxy (or with no proxy file), the settings file decides as before
+  writeSettings(primaryOf(themeX, 'SomeRealTheme'))
+  assert.equal(k.primaryDiffers(root, presetX), false, 'off-proxy: settings file decides')
+  assert.equal(k.primaryDiffers(root, presetA), true)
+  fs2.rmSync(path2.join(sg, 'Themes', '!KovaPreset.json'))
+  writeSettings(primaryOf(themeX, '!KovaPreset - X'))
+  assert.equal(k.primaryDiffers(root, presetX), false, 'proxy selected but file missing: no crash, settings decide')
+
+  fs2.rmSync(root, { recursive: true, force: true })
+  console.log('primaryDiffers vs proxy theme: ok')
+}
+
+// stats-CSV parsing + upcoming-scenario derivation - synthetic install with a
+// staged playlist session. upcomingScenario counts the session's finished runs
+// (CSVs newer than the playlist load) against each scenario's required plays,
+// in list order; off-playlist it falls back to the scenario just played.
+{
+  const fs2 = require('node:fs')
+  const os2 = require('node:os')
+  const path2 = require('node:path')
+
+  const p1 = k.statsFileScenario('VT Pasu Advanced S5 - Challenge - 2026.07.29-19.05.28 Stats.csv')
+  assert.equal(p1.scenario, 'VT Pasu Advanced S5')
+  assert.equal(p1.ts, new Date(2026, 6, 29, 19, 5, 28).getTime(), 'timestamp parses as local time')
+  // scenario names can contain " - " themselves; the greedy head must keep it
+  const p2 = k.statsFileScenario('A - B - Challenge - 2026.01.02-03.04.05 Stats.csv')
+  assert.equal(p2.scenario, 'A - B')
+  assert.equal(k.statsFileScenario('not a stats file.csv'), null)
+
+  const root = fs2.mkdtempSync(path2.join(os2.tmpdir(), 'kova-selftest-'))
+  const sg = path2.join(root, 'Saved', 'SaveGames')
+  fs2.mkdirSync(sg, { recursive: true })
+  fs2.mkdirSync(path2.join(root, 'stats'), { recursive: true })
+  const csv = (scenario, ts) =>
+    fs2.writeFileSync(path2.join(root, 'stats', `${scenario} - Challenge - ${ts} Stats.csv`), '')
+
+  // no playlist file at all -> the played scenario is the upcoming one
+  csv('Free Play', '2026.07.30-10.00.00')
+  assert.equal(k.upcomingScenario(root, 'Free Play'), 'Free Play')
+
+  // playlist: A (1 play), B (2 plays), C (1 play); loaded at 09:00
+  fs2.writeFileSync(
+    path2.join(sg, 'PlaylistInProgress.json'),
+    JSON.stringify({
+      playlistName: 'Bench',
+      scenarioList: [
+        { scenario_name: 'A', play_Count: 1 },
+        { scenario_name: 'B', play_Count: 2 },
+        { scenario_name: 'C', play_Count: 1 },
+      ],
+    })
+  )
+  const loaded = new Date(2026, 6, 30, 9, 0, 0)
+  fs2.utimesSync(path2.join(sg, 'PlaylistInProgress.json'), loaded, loaded)
+
+  // a PRE-session CSV of A must not count toward this run-through
+  csv('A', '2026.07.30-08.30.00')
+  csv('A', '2026.07.30-09.10.00') // A done (1/1)
+  assert.equal(k.upcomingScenario(root, 'A'), 'B', 'after A the playlist moves to B')
+  csv('B', '2026.07.30-09.20.00') // B 1/2
+  assert.equal(k.upcomingScenario(root, 'B'), 'B', 'B needs a second play first')
+  csv('B', '2026.07.30-09.30.00') // B 2/2
+  assert.equal(k.upcomingScenario(root, 'B'), 'C')
+  csv('C', '2026.07.30-09.40.00') // playlist complete
+  assert.equal(k.upcomingScenario(root, 'C'), 'C', 'finished playlist: stay on the played scenario')
+  // a scenario outside the playlist is just being ground on its own
+  assert.equal(k.upcomingScenario(root, 'Free Play'), 'Free Play')
+
+  fs2.rmSync(root, { recursive: true, force: true })
+  console.log('playlist upcoming-scenario: ok')
+}
+
 const install = k.findInstall()
 console.log('install:', install || 'NOT FOUND')
 if (!install) process.exit(1)

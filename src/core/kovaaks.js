@@ -25,6 +25,7 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const { execFileSync } = require('node:child_process')
+const { writeFileAtomic } = require('./fsatomic')
 
 // --- weaponsettings.ini: live keys ---
 const WEAPON_KEYS = [
@@ -273,18 +274,80 @@ function readFileOrNull(file) {
 // bounces through a different one first).
 function recentScenariosFromStats(install, count = 2) {
   try {
-    const newest = new Map() // scenario -> newest ts
+    const newest = new Map() // scenario -> newest run ts (see statsFileScenario)
     for (const f of fs.readdirSync(path.join(install, 'stats'))) {
-      const m = f.match(/^(.*) - .+ - (\d{4}\.\d{2}\.\d{2}-\d{2}\.\d{2}\.\d{2}) Stats\.csv$/)
-      if (m && (!newest.has(m[1]) || m[2] > newest.get(m[1]))) newest.set(m[1], m[2])
+      const p = statsFileScenario(f)
+      if (p && (!newest.has(p.scenario) || p.ts > newest.get(p.scenario))) newest.set(p.scenario, p.ts)
     }
     return [...newest.entries()]
-      .sort((a, b) => (a[1] < b[1] ? 1 : -1))
+      .sort((a, b) => b[1] - a[1])
       .slice(0, count)
       .map(([scenario]) => scenario)
   } catch {
     return []
   }
+}
+
+// ---- playlists / upcoming scenario ---------------------------------------------
+// PlaylistInProgress.json is the game's cache of the playlist last loaded into
+// the playlist player: scenarioList in play order, each with play_Count = how
+// many runs that scenario gets before the playlist advances. It is a copy of the
+// playlist DEFINITION, not a progress counter - the counts never change as you
+// play. The file is (re)written when a playlist loads, so its mtime marks the
+// session start; actual progress exists on disk only as the stats CSVs dropped
+// after every finished run.
+function readPlaylistInProgress(install) {
+  const file = path.join(install, 'Saved', 'SaveGames', 'PlaylistInProgress.json')
+  try {
+    const j = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''))
+    if (!Array.isArray(j.scenarioList) || !j.scenarioList.length) return null
+    return {
+      name: String(j.playlistName || ''),
+      loadedAt: fs.statSync(file).mtimeMs,
+      scenarios: j.scenarioList.map((s) => ({
+        name: String(s.scenario_name || ''),
+        plays: Math.max(1, Number(s.play_Count) || 1),
+      })),
+    }
+  } catch {
+    return null
+  }
+}
+
+// "<scenario> - <mode> - YYYY.MM.DD-HH.MM.SS Stats.csv" -> { scenario, ts }.
+// The timestamp is the game's local time; parse it to epoch ms so it compares
+// against file mtimes.
+function statsFileScenario(filename) {
+  const m = String(filename || '').match(
+    /^(.*) - .+ - (\d{4})\.(\d{2})\.(\d{2})-(\d{2})\.(\d{2})\.(\d{2}) Stats\.csv$/
+  )
+  if (!m) return null
+  const [, scenario, y, mo, d, h, mi, s] = m
+  return { scenario, ts: new Date(+y, +mo - 1, +d, +h, +mi, +s).getTime() }
+}
+
+// The scenario the player is about to enter, given that a run of `finished`
+// just ended. In a playlist session (the finished scenario is in the loaded
+// playlist): count the session's finished runs per scenario - CSVs newer than
+// the playlist load - then walk the list in order to the first scenario still
+// short of its required plays; that is where the playlist player advances.
+// Off-playlist, or with the playlist done, the player is grinding `finished`
+// itself, so that's the upcoming one.
+function upcomingScenario(install, finished) {
+  const pl = readPlaylistInProgress(install)
+  if (!pl || !pl.scenarios.some((s) => s.name === finished)) return finished
+  const counts = new Map()
+  try {
+    for (const f of fs.readdirSync(path.join(install, 'stats'))) {
+      const parsed = statsFileScenario(f)
+      if (parsed && parsed.ts >= pl.loadedAt)
+        counts.set(parsed.scenario, (counts.get(parsed.scenario) || 0) + 1)
+    }
+  } catch {
+    return finished
+  }
+  for (const s of pl.scenarios) if ((counts.get(s.name) || 0) < s.plays) return s.name
+  return finished
 }
 
 // Full snapshot = exactly what a preset stores.
@@ -302,7 +365,7 @@ function applyPalette(install, raw) {
   if (raw == null) return false
   const p = paths(install)
   if (readFileOrNull(p.palette) === raw) return false
-  fs.writeFileSync(p.palette, raw)
+  writeFileAtomic(p.palette, raw)
   return true
 }
 
@@ -310,7 +373,7 @@ function applyUi(install, raw) {
   if (raw == null) return false
   const p = paths(install)
   if (readFileOrNull(p.ui) === raw) return false
-  fs.writeFileSync(p.ui, raw)
+  writeFileAtomic(p.ui, raw)
   return true
 }
 
@@ -587,7 +650,7 @@ function writeProxyTheme(install, primary, name) {
   const t = themeFileFromPrimary(primary, name)
   const dir = paths(install).themes
   const file = path.join(dir, `${PROXY_THEME}.json`)
-  fs.writeFileSync(file, JSON.stringify(t, null, '\t'))
+  writeFileAtomic(file, JSON.stringify(t, null, '\t'))
   // drop the pre-rename proxy so the menu doesn't show a stale duplicate
   try {
     fs.unlinkSync(path.join(dir, 'KovaPreset.json'))
@@ -604,7 +667,7 @@ function setProxyThemeName(install, name) {
   try {
     const t = JSON.parse(fs.readFileSync(file, 'utf8'))
     t.themeName = name || PROXY_THEME
-    fs.writeFileSync(file, JSON.stringify(t, null, '\t'))
+    writeFileAtomic(file, JSON.stringify(t, null, '\t'))
     return true
   } catch {
     return false
@@ -673,17 +736,36 @@ function weaponDiffers(install, weapon) {
 function primaryDiffers(install, primary) {
   if (!primary) return false
   const cur = readPrimary(install)
+  // While the game runs it rewrites PrimaryUserSettings.json from LAUNCH-TIME
+  // memory, so its theme fields go stale the moment a preset is applied live -
+  // the proxy theme file is what the game is actually rendering. Compare theme
+  // fields against that whenever the proxy is the selection, or re-applying the
+  // preset the game launched with reads as "nothing changed" and the proxy never
+  // gets rewritten, leaving the PREVIOUS preset's theme on screen (and its name
+  // queued for the quit flush).
+  // Every key the proxy carries is a theme-visual one (themeToPrimary writes
+  // nothing else), so key presence is the theme test - sens, DPI and the sound
+  // fields have no live route and stay on the settings file. Same for the few
+  // theme keys a theme file can't hold (the WallMat/FloorMat indices): absent
+  // from the proxy, so they fall through to `cur` as before.
+  const proxy = proxyThemeSelected(install) ? readProxyPrimary(install) : null
   for (const section of Object.keys(PRIMARY_MANAGED))
     for (const [name, val] of Object.entries(primary[section] || {})) {
       // The selected-theme label is pinned to the proxy on apply, so comparing
       // it would make every preset read as "differs" forever.
       if (name === 'CurrentThemeName') continue
-      if (!eq(val, cur[section]?.[name])) return true
+      const ref = proxy && name in (proxy[section] || {}) ? proxy[section] : cur[section]
+      if (!eq(val, ref?.[name])) return true
     }
   return false
 }
 
 // ---- writing ------------------------------------------------------------------
+// Every game-file write goes through writeFileAtomic (core/fsatomic) - the game
+// re-reads these files at its own moments (the proxy on menu-open,
+// weaponsettings on scenario entry), so a torn write can be read as truncated
+// JSON/INI.
+
 // weaponsettings.ini - live. Targeted line replace, formatting preserved.
 function applyWeapon(install, weapon) {
   if (!weapon) return false
@@ -704,7 +786,7 @@ function applyWeapon(install, weapon) {
     if (re.test(raw)) raw = raw.replace(re, () => `${k}=${val}`)
   }
   if (raw === before) return false
-  fs.writeFileSync(p.weapon, bom + raw + tail)
+  writeFileAtomic(p.weapon, bom + raw + tail)
   return true
 }
 
@@ -723,7 +805,7 @@ function applyPrimary(install, primary) {
       obj[section][`${SECTION_PREFIX[section]}::${name}`] = primary[section][name]
     }
   }
-  fs.writeFileSync(p.primary, (hadBom ? '﻿' : '') + JSON.stringify(obj, null, '\t'))
+  writeFileAtomic(p.primary, (hadBom ? '﻿' : '') + JSON.stringify(obj, null, '\t'))
   return true
 }
 
@@ -878,6 +960,10 @@ module.exports = {
   libraryPaths,
   checkHealth,
   recentScenariosFromStats,
+  readPlaylistInProgress,
+  statsFileScenario,
+  upcomingScenario,
+  writeFileAtomic,
   readActive,
   readWeapon,
   readPrimary,
