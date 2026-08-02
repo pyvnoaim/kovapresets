@@ -12,7 +12,6 @@ contextBridge.exposeInMainWorld('kova', {
   duplicate: (id) => ipcRenderer.invoke('presets:duplicate', id),
   reorder: (orderedIds) => ipcRenderer.invoke('presets:reorder', orderedIds),
   setHotkey: (id, hotkey) => ipcRenderer.invoke('presets:setHotkey', id, hotkey),
-  setScenarios: (id, scenarios) => ipcRenderer.invoke('presets:setScenarios', id, scenarios),
   apply: (id) => ipcRenderer.invoke('preset:apply', id),
   deactivate: () => ipcRenderer.invoke('presets:deactivate'),
   updatePreset: (id, picks) => ipcRenderer.invoke('presets:update', id, picks),
@@ -35,7 +34,4 @@ contextBridge.exposeInMainWorld('kova', {
   onChanged: (cb) => ipcRenderer.on('changed', () => cb()),
   // Fired when a global hotkey applied a preset in the background.
   onHotkeyApplied: (cb) => ipcRenderer.on('hotkey-applied', (_e, info) => cb(info)),
-  // Fired when a run ended and a scenario-assigned preset was applied for the
-  // upcoming scenario (see the auto-switching block in main.js).
-  onAutoApplied: (cb) => ipcRenderer.on('auto-applied', (_e, info) => cb(info)),
 })

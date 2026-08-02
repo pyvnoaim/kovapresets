@@ -1,6 +1,6 @@
 # KovaPresets
 
-Save your KovaaK's **crosshair, theme, sounds, sens and HUD layout** as presets and
+Save your KovaaK's **crosshair, theme, sounds and sens** as presets and
 switch between them with one click, or a global hotkey, without alt-tabbing out of
 a run.
 
@@ -38,20 +38,17 @@ untouched.
 | Hit / kill sounds | On your next scenario load |
 | Scenario sens override + DPI | Sens on scenario load, DPI on next launch |
 | Theme (walls, floor, sky, enemy colors) | Live, once you open the game's settings screen |
-| HUD window layout, palette | When the game next starts or quits |
 
 Beyond switching presets:
 
 - **Global hotkeys** — bind a preset to a key combo that works while you're in game.
-- **Scenario auto-apply** — assign scenarios to a preset (target icon) and it applies
-  itself the moment a run ends and one of them is up next. Playlist-aware: grinding a
-  benchmark playlist switches your crosshair per scenario, hands-off.
 - **Live theme swapping** — select the bundled `!KovaPreset` theme in game once, and
   theme changes apply without restarting.
 - **One-tap scenario re-enter** — reloads your current scenario through Steam so a
   change goes live immediately, optionally automatic after a hotkey apply.
 - **HUD editor** — drag your in-game HUD windows on a virtual screen with snapping,
-  alignment, even spacing and undo, instead of nudging them in game.
+  alignment, even spacing and undo, instead of nudging them in game. Saved layouts
+  apply immediately while KovaaK's is closed, or queue for its next quit.
 - **Import / export** — share a preset as a `.kovapreset.json` file.
 - **Restore original setup** — puts every setting back to how it was before
   KovaPresets ever touched it.

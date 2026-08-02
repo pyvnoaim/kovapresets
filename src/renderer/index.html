@@ -112,10 +112,8 @@
               <input id="b-dpi" type="text" inputmode="numeric" placeholder="keep current" spellcheck="false" />
             </label>
           </div>
-          <p id="b-note" class="builder-note muted">
-            Palette, HUD layout, and pitch/volume settings are carried over from your current setup.
-            Sens uses your current sens scale; sens and DPI both apply on the game's next launch.
-          </p>
+          <!-- populated by populateBuilder() - the text differs for create vs edit -->
+          <p id="b-note" class="builder-note muted"></p>
           <div class="builder-actions">
             <button id="b-cancel">Cancel</button>
             <button id="b-create" class="primary">Create preset</button>

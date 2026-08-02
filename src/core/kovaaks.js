@@ -50,6 +50,10 @@ const WEAPON_KEYS = [
   'ZoomSensMultiplier',
 ]
 
+// Compiled once - readWeapon runs on every state poll, applyWeapon on every
+// apply, and both need the same line-anchored match per key.
+const WEAPON_RE = new Map(WEAPON_KEYS.map((k) => [k, new RegExp(`^${k}=(.*)$`, 'm')]))
+
 // --- PrimaryUserSettings.json: the managed theme + event-sound fields, by
 // section. Short names here; the full key is `${SECTION_PREFIX[section]}::${name}`. ---
 const PRIMARY_MANAGED = {
@@ -155,22 +159,15 @@ function findInstall() {
 function paths(install) {
   const sg = path.join(install, 'Saved', 'SaveGames')
   return {
+    saveGames: sg,
     weapon: path.join(sg, 'weaponsettings.ini'),
     primary: path.join(sg, 'PrimaryUserSettings.json'),
     themes: path.join(sg, 'Themes'),
+    proxy: path.join(sg, 'Themes', `${PROXY_THEME}.json`),
     crosshairs: path.join(install, 'crosshairs'),
     sounds: path.join(install, 'sounds'),
     // HUD window positions/scales - lives with the other SaveGames files.
     ui: path.join(sg, 'UI.json'),
-    // The UI palette is UE per-user config, NOT in the game folder.
-    palette: path.join(
-      process.env.LOCALAPPDATA || '',
-      'FPSAimTrainer',
-      'Saved',
-      'Config',
-      'WindowsNoEditor',
-      'Palette.ini'
-    ),
   }
 }
 
@@ -225,7 +222,7 @@ function readWeapon(install) {
   const raw = body.slice(0, weaponGlobalEnd(body))
   const out = {}
   for (const k of WEAPON_KEYS) {
-    const m = raw.match(new RegExp(`^${k}=(.*)$`, 'm'))
+    const m = raw.match(WEAPON_RE.get(k))
     out[k] = m ? m[1].trim() : ''
   }
   return out
@@ -255,8 +252,8 @@ function readPrimary(install) {
   return out
 }
 
-// Palette.ini and UI.json are captured/applied as whole files - they're small,
-// self-contained, and have no partial-field semantics worth modelling.
+// UI.json is captured/applied as a whole file - it's small,
+// self-contained, and has no partial-field semantics worth modelling.
 function readFileOrNull(file) {
   try {
     return fs.readFileSync(file, 'utf8')
@@ -272,7 +269,7 @@ function readFileOrNull(file) {
 // [0] is the scenario to re-enter; [1] doubles as the "parking" hop target
 // (jumping to the scenario you're already in doesn't reload it, so re-enter
 // bounces through a different one first).
-function recentScenariosFromStats(install, count = 2) {
+function recentScenariosFromStats(install) {
   try {
     const newest = new Map() // scenario -> newest run ts (see statsFileScenario)
     for (const f of fs.readdirSync(path.join(install, 'stats'))) {
@@ -281,36 +278,10 @@ function recentScenariosFromStats(install, count = 2) {
     }
     return [...newest.entries()]
       .sort((a, b) => b[1] - a[1])
-      .slice(0, count)
+      .slice(0, 2)
       .map(([scenario]) => scenario)
   } catch {
     return []
-  }
-}
-
-// ---- playlists / upcoming scenario ---------------------------------------------
-// PlaylistInProgress.json is the game's cache of the playlist last loaded into
-// the playlist player: scenarioList in play order, each with play_Count = how
-// many runs that scenario gets before the playlist advances. It is a copy of the
-// playlist DEFINITION, not a progress counter - the counts never change as you
-// play. The file is (re)written when a playlist loads, so its mtime marks the
-// session start; actual progress exists on disk only as the stats CSVs dropped
-// after every finished run.
-function readPlaylistInProgress(install) {
-  const file = path.join(install, 'Saved', 'SaveGames', 'PlaylistInProgress.json')
-  try {
-    const j = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''))
-    if (!Array.isArray(j.scenarioList) || !j.scenarioList.length) return null
-    return {
-      name: String(j.playlistName || ''),
-      loadedAt: fs.statSync(file).mtimeMs,
-      scenarios: j.scenarioList.map((s) => ({
-        name: String(s.scenario_name || ''),
-        plays: Math.max(1, Number(s.play_Count) || 1),
-      })),
-    }
-  } catch {
-    return null
   }
 }
 
@@ -326,47 +297,15 @@ function statsFileScenario(filename) {
   return { scenario, ts: new Date(+y, +mo - 1, +d, +h, +mi, +s).getTime() }
 }
 
-// The scenario the player is about to enter, given that a run of `finished`
-// just ended. In a playlist session (the finished scenario is in the loaded
-// playlist): count the session's finished runs per scenario - CSVs newer than
-// the playlist load - then walk the list in order to the first scenario still
-// short of its required plays; that is where the playlist player advances.
-// Off-playlist, or with the playlist done, the player is grinding `finished`
-// itself, so that's the upcoming one.
-function upcomingScenario(install, finished) {
-  const pl = readPlaylistInProgress(install)
-  if (!pl || !pl.scenarios.some((s) => s.name === finished)) return finished
-  const counts = new Map()
-  try {
-    for (const f of fs.readdirSync(path.join(install, 'stats'))) {
-      const parsed = statsFileScenario(f)
-      if (parsed && parsed.ts >= pl.loadedAt)
-        counts.set(parsed.scenario, (counts.get(parsed.scenario) || 0) + 1)
-    }
-  } catch {
-    return finished
-  }
-  for (const s of pl.scenarios) if ((counts.get(s.name) || 0) < s.plays) return s.name
-  return finished
-}
-
-// Full snapshot = exactly what a preset stores.
+// Full on-disk snapshot: weapon + primary are the preset shape; ui (the raw
+// UI.json text) rides along for the HUD editor and baseline capture.
 function readActive(install) {
   const p = paths(install)
   return {
     weapon: readWeapon(install),
     primary: readPrimary(install),
-    palette: readFileOrNull(p.palette),
     ui: readFileOrNull(p.ui),
   }
-}
-
-function applyPalette(install, raw) {
-  if (raw == null) return false
-  const p = paths(install)
-  if (readFileOrNull(p.palette) === raw) return false
-  writeFileAtomic(p.palette, raw)
-  return true
 }
 
 function applyUi(install, raw) {
@@ -375,6 +314,20 @@ function applyUi(install, raw) {
   if (readFileOrNull(p.ui) === raw) return false
   writeFileAtomic(p.ui, raw)
   return true
+}
+
+// hud:save writes the HUD editor's serialized layout back to the game VERBATIM,
+// and a corrupt UI.json breaks the in-game HUD - so the shape is checked at the
+// IPC boundary rather than trusting the caller.
+const MAX_UI_RAW = 512 * 1024 // the file is a few KB in practice
+
+function validUi(s) {
+  if (typeof s !== 'string' || s.length > MAX_UI_RAW) return false
+  try {
+    return JSON.parse(s) !== null
+  } catch {
+    return false
+  }
 }
 
 function listFiles(dir, exts) {
@@ -547,21 +500,12 @@ function proxyThemeName(mirrored) {
 const isProxyThemeName = (name) =>
   name === PROXY_THEME || name === 'KovaPreset' || String(name || '').startsWith(PROXY_THEME + PROXY_SEP)
 
-// The mirrored theme back out of a proxy name ('' when it carries none).
-const mirroredThemeName = (name) =>
-  String(name || '').startsWith(PROXY_THEME + PROXY_SEP)
-    ? String(name).slice((PROXY_THEME + PROXY_SEP).length)
-    : ''
-
 // The proxy file's contents in primary-settings shape - what the game is
 // actually rendering while the proxy theme is selected. Single fixed-name file
 // read (no directory scan), cheap enough for the state poll path.
 function readProxyPrimary(install) {
   try {
-    const t = JSON.parse(
-      fs.readFileSync(path.join(paths(install).themes, `${PROXY_THEME}.json`), 'utf8')
-    )
-    return themeToPrimary(t)
+    return themeToPrimary(JSON.parse(fs.readFileSync(paths(install).proxy, 'utf8')))
   } catch {
     return null
   }
@@ -621,9 +565,7 @@ function themeFileFromPrimary(primary, name) {
 // verbatim rather than recomputing it - see the PROXY_THEME notes.
 function readProxyName(install) {
   try {
-    const t = JSON.parse(
-      fs.readFileSync(path.join(paths(install).themes, `${PROXY_THEME}.json`), 'utf8')
-    )
+    const t = JSON.parse(fs.readFileSync(paths(install).proxy, 'utf8'))
     if (isProxyThemeName(t.themeName)) return t.themeName
   } catch {
     // fall through
@@ -648,14 +590,13 @@ function readProxyName(install) {
 // the game runs, and the new one only when it's closed.
 function writeProxyTheme(install, primary, name) {
   const t = themeFileFromPrimary(primary, name)
-  const dir = paths(install).themes
-  const file = path.join(dir, `${PROXY_THEME}.json`)
-  writeFileAtomic(file, JSON.stringify(t, null, '\t'))
+  const p = paths(install)
+  writeFileAtomic(p.proxy, JSON.stringify(t, null, '\t'))
   // drop the pre-rename proxy so the menu doesn't show a stale duplicate
   try {
-    fs.unlinkSync(path.join(dir, 'KovaPreset.json'))
+    fs.unlinkSync(path.join(p.themes, 'KovaPreset.json'))
   } catch {}
-  return file
+  return p.proxy
 }
 
 // Re-label the proxy without touching its visuals - the game-quit flush, where
@@ -663,7 +604,7 @@ function writeProxyTheme(install, primary, name) {
 // Returns false if there's no proxy file yet, so the caller doesn't strand
 // CurrentThemeName pointing at a name nothing answers to.
 function setProxyThemeName(install, name) {
-  const file = path.join(paths(install).themes, `${PROXY_THEME}.json`)
+  const file = paths(install).proxy
   try {
     const t = JSON.parse(fs.readFileSync(file, 'utf8'))
     t.themeName = name || PROXY_THEME
@@ -748,7 +689,9 @@ function primaryDiffers(install, primary) {
   // fields have no live route and stay on the settings file. Same for the few
   // theme keys a theme file can't hold (the WallMat/FloorMat indices): absent
   // from the proxy, so they fall through to `cur` as before.
-  const proxy = proxyThemeSelected(install) ? readProxyPrimary(install) : null
+  const proxy = isProxyThemeName(cur.stringSettings?.CurrentThemeName)
+    ? readProxyPrimary(install)
+    : null
   for (const section of Object.keys(PRIMARY_MANAGED))
     for (const [name, val] of Object.entries(primary[section] || {})) {
       // The selected-theme label is pinned to the proxy on apply, so comparing
@@ -782,7 +725,7 @@ function applyWeapon(install, weapon) {
     // single line only (imported presets are untrusted - no ini-line injection),
     // and a function replacement so "$&" in a value isn't expanded by replace()
     const val = String(weapon[k]).replace(/[\r\n]/g, '')
-    const re = new RegExp(`^${k}=.*$`, 'm')
+    const re = WEAPON_RE.get(k)
     if (re.test(raw)) raw = raw.replace(re, () => `${k}=${val}`)
   }
   if (raw === before) return false
@@ -870,7 +813,7 @@ function checkHealth(install, { probeWrites = true } = {}) {
   add('install', "KovaaK's install", 'ok', install)
 
   const p = paths(install)
-  const sg = path.join(install, 'Saved', 'SaveGames')
+  const sg = p.saveGames
 
   const sgOk = canWriteDir(sg, probeWrites)
   add(
@@ -913,7 +856,7 @@ function checkHealth(install, { probeWrites = true } = {}) {
       : `Can't write to ${p.themes}. Live theme swapping won't work until it is.`
   )
 
-  const proxyFile = path.join(p.themes, `${PROXY_THEME}.json`)
+  const proxyFile = p.proxy
   if (proxyThemeSelected(install))
     add(
       'proxy',
@@ -954,39 +897,34 @@ function isGameRunning() {
 }
 
 module.exports = {
-  WEAPON_KEYS,
-  PRIMARY_MANAGED,
   findInstall,
-  libraryPaths,
+  paths,
   checkHealth,
   recentScenariosFromStats,
-  readPlaylistInProgress,
-  statsFileScenario,
-  upcomingScenario,
   writeFileAtomic,
   readActive,
   readWeapon,
   readPrimary,
   primaryFromTheme,
   listOptions,
-  weaponDiffers,
   primaryDiffers,
   setSensPick,
   sensScaleOf,
-  shadowingWeaponSections,
   applyWeapon,
   applyPrimary,
-  applyPalette,
   applyUi,
+  validUi,
   readResolution,
   isGameRunning,
   PROXY_THEME,
   proxyThemeName,
-  isProxyThemeName,
-  mirroredThemeName,
   readProxyPrimary,
   readProxyName,
   writeProxyTheme,
   setProxyThemeName,
   proxyThemeSelected,
+  // Exercised only by selftest.js, but they guard real file semantics - keep.
+  statsFileScenario,
+  weaponDiffers,
+  shadowingWeaponSections,
 }

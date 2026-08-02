@@ -363,6 +363,8 @@ function flushPendingIfPossible() {
 }
 
 function flushPending() {
+  // No queue at all is the overwhelmingly common tick - skip on a bare stat.
+  if (!fs.existsSync(pendingFile())) return false
   const pending = readPending()
   if (!pending) return false
   // Cached first, authoritative second, and the order matters for cost: this runs
@@ -375,12 +377,10 @@ function flushPending() {
   if (gameRunningNow()) return false
   const install = findInstall()
   if (!install) return false
+  const p = k.paths(install)
   if (pending.primaryRaw != null)
     // undo restore: put the exact captured file back
-    k.writeFileAtomic(
-      path.join(install, 'Saved', 'SaveGames', 'PrimaryUserSettings.json'),
-      pending.primaryRaw
-    )
+    k.writeFileAtomic(p.primary, pending.primaryRaw)
   else if (pending.primary) {
     // Re-label the proxy BEFORE pointing CurrentThemeName at the new name: the
     // two are matched against each other, and a crash between them is only
@@ -398,11 +398,9 @@ function flushPending() {
     }
     k.applyPrimary(install, pending.primary)
   }
-  if (pending.palette != null) k.applyPalette(install, pending.palette)
   if (pending.ui != null) k.applyUi(install, pending.ui)
   // re-assert the weapon intent the game's exit-write may have reverted
-  if (pending.weaponRaw != null)
-    k.writeFileAtomic(path.join(install, 'Saved', 'SaveGames', 'weaponsettings.ini'), pending.weaponRaw)
+  if (pending.weaponRaw != null) k.writeFileAtomic(p.weapon, pending.weaponRaw)
   else if (pending.weapon) k.applyWeapon(install, pending.weapon)
   log('pending flushed', Object.keys(pending))
   clearPending()
@@ -419,24 +417,19 @@ const hasBaseline = () => fs.existsSync(path.join(baselineDir(), 'weapon.bak'))
 
 function captureBaselineIfMissing(install) {
   if (hasBaseline()) return
-  const p = {
-    weapon: path.join(install, 'Saved', 'SaveGames', 'weaponsettings.ini'),
-    primary: path.join(install, 'Saved', 'SaveGames', 'PrimaryUserSettings.json'),
-    proxy: path.join(install, 'Saved', 'SaveGames', 'Themes', `${k.PROXY_THEME}.json`),
-  }
+  const p = k.paths(install)
+  const files = { weapon: p.weapon, primary: p.primary, proxy: p.proxy, ui: p.ui }
   const dir = baselineDir()
   fs.mkdirSync(dir, { recursive: true })
-  const active = k.readActive(install)
-  for (const [name, file] of Object.entries(p))
+  for (const [name, file] of Object.entries(files))
     if (fs.existsSync(file)) fs.copyFileSync(file, path.join(dir, `${name}.bak`))
-  if (active.palette != null) fs.writeFileSync(path.join(dir, 'palette.bak'), active.palette)
-  if (active.ui != null) fs.writeFileSync(path.join(dir, 'ui.bak'), active.ui)
 }
 
 function deactivatePresets() {
   if (!hasBaseline()) return { ok: false, error: 'Nothing to restore.' }
   const dir = baselineDir()
   const install = requireInstall()
+  const p = k.paths(install)
   const running = gameRunning()
   const read = (n) => {
     const f = path.join(dir, n)
@@ -444,39 +437,27 @@ function deactivatePresets() {
   }
   // weapon + proxy theme are safe to write any time
   const weapon = read('weapon.bak')
-  if (weapon != null)
-    k.writeFileAtomic(path.join(install, 'Saved', 'SaveGames', 'weaponsettings.ini'), weapon)
+  if (weapon != null) k.writeFileAtomic(p.weapon, weapon)
   const proxy = read('proxy.bak')
-  if (proxy != null)
-    k.writeFileAtomic(
-      path.join(install, 'Saved', 'SaveGames', 'Themes', `${k.PROXY_THEME}.json`),
-      proxy
-    )
+  if (proxy != null) k.writeFileAtomic(p.proxy, proxy)
   // game-owned files follow the closed-game rule
   const primaryRaw = read('primary.bak')
-  const palette = read('palette.bak')
   const ui = read('ui.bak')
   let queued = false
   if (running) {
     // A restore supersedes EVERYTHING queued - start from an empty pending, or
-    // a leftover preset intent with no baseline counterpart (e.g. a queued
-    // palette when no palette file existed at capture) would re-apply part of
-    // the preset after the restore, on game quit.
+    // a leftover intent with no baseline counterpart (e.g. a queued HUD layout
+    // when no UI.json existed at capture) would re-apply part of it after the
+    // restore, on game quit.
     const pending = {}
     if (weapon != null) pending.weaponRaw = weapon
     if (primaryRaw != null) pending.primaryRaw = primaryRaw
-    if (palette != null) pending.palette = palette
     if (ui != null) pending.ui = ui
     setPending(pending)
-    queued = primaryRaw != null || palette != null || ui != null
+    queued = primaryRaw != null || ui != null
   } else {
     clearPending() // same reasoning - drop any not-yet-flushed preset intents
-    if (primaryRaw != null)
-      k.writeFileAtomic(
-        path.join(install, 'Saved', 'SaveGames', 'PrimaryUserSettings.json'),
-        primaryRaw
-      )
-    if (palette != null) k.applyPalette(install, palette)
+    if (primaryRaw != null) k.writeFileAtomic(p.primary, primaryRaw)
     if (ui != null) k.applyUi(install, ui)
   }
   fs.rmSync(dir, { recursive: true, force: true }) // restored - next apply recaptures
@@ -491,7 +472,7 @@ function doApplyPreset(preset) {
   captureBaselineIfMissing(install)
   const weaponChanged = k.applyWeapon(install, preset.weapon)
 
-  const active = k.readActive(install)
+  const activePrimary = k.readPrimary(install)
   // Sens and DPI have no live route at all - the game reads them only at launch
   // (see setSensPick). Unlike the theme, no in-game gesture picks them up, so a
   // changed value would otherwise sit there silently doing nothing. Report which
@@ -506,10 +487,10 @@ function doApplyPreset(preset) {
   const changedNum = (want, cur) =>
     Number.isFinite(Number(want)) && Number(want) !== Number(cur)
   const wantSens = preset.primary?.floatSettings?.XSens
-  if (wantSens !== undefined && changedNum(wantSens, active.primary?.floatSettings?.XSens))
+  if (wantSens !== undefined && changedNum(wantSens, activePrimary.floatSettings?.XSens))
     launchOnly.push({ field: 'sens', value: Number(wantSens) })
   const wantDpi = preset.primary?.integerSettings?.DPI
-  if (wantDpi !== undefined && changedNum(wantDpi, active.primary?.integerSettings?.DPI))
+  if (wantDpi !== undefined && changedNum(wantDpi, activePrimary.integerSettings?.DPI))
     launchOnly.push({ field: 'DPI', value: Number(wantDpi) })
 
   // primaryDiffers compares against PrimaryUserSettings.json ON DISK - except for
@@ -551,11 +532,7 @@ function doApplyPreset(preset) {
       delete primaryIntent.stringSettings.CurrentThemeName
     }
   }
-  const wants = {
-    primary: primaryChanged ? primaryIntent : null,
-    palette: preset.palette != null && preset.palette !== active.palette ? preset.palette : null,
-    ui: preset.ui != null && preset.ui !== active.ui ? preset.ui : null,
-  }
+  const wantPrimary = primaryChanged ? primaryIntent : null
 
   let theme = 'nochange'
   if (running) {
@@ -564,62 +541,60 @@ function doApplyPreset(preset) {
     // intent; the quit flush re-asserts it.
     //
     // REPLACE the queue, don't merge into it: a preset is a total intent, and a
-    // field this preset leaves alone (wants.X null because the disk already
+    // field this preset leaves alone (nothing to write, the disk already
     // matches) would otherwise keep the PREVIOUS preset's queued value and land
     // that on game quit - e.g. apply a dark preset, then a light one whose theme
     // equals the on-disk one, and the dark theme still applies at quit.
     //
-    // The exception is a field the preset carries NOTHING for: it has no
-    // opinion, so whatever else queued it stands - e.g. a HUD layout saved from
-    // the editor mid-session, then a preset with no `ui` applied on top.
+    // The exception is a field presets carry NOTHING for: a HUD layout saved
+    // from the editor mid-session (pending.ui) is its own intent and stands.
     const prev = readPending() || {}
-    // `wants` is the CHANGE set (it drives the messaging below); the queue takes
-    // the full intent, so an unchanged-on-disk field is still re-asserted at quit.
-    const next = { weapon: preset.weapon, ...wants, primary: primaryIntent }
-    if (preset.palette == null && prev.palette != null) next.palette = prev.palette
-    if (preset.ui == null && prev.ui != null) next.ui = prev.ui
+    const next = { weapon: preset.weapon, primary: primaryIntent }
+    if (prev.ui != null) next.ui = prev.ui
     setPending(next)
-    if (wants.primary) theme = k.proxyThemeSelected(install) ? 'live' : 'arming'
-    else if (wants.palette != null || wants.ui != null) theme = 'queued'
-  } else if (wants.primary || wants.palette != null || wants.ui != null) {
-    if (wants.primary) k.applyPrimary(install, wants.primary)
-    if (wants.palette != null) k.applyPalette(install, wants.palette)
-    if (wants.ui != null) k.applyUi(install, wants.ui)
+    if (wantPrimary) theme = k.proxyThemeSelected(install) ? 'live' : 'arming'
+  } else if (wantPrimary) {
+    k.applyPrimary(install, wantPrimary)
     clearPending()
     theme = 'applied'
   }
-  // `queued` = game-owned fields (theme/sens/DPI/palette/HUD) waiting on the game
-  // to close. Only a full restart makes those live, so it gates that escalation.
-  const queued = running && !!(wants.primary || wants.palette != null || wants.ui != null)
+  // `queued` = game-owned fields (theme/sens/DPI) waiting on the game to close.
+  // Only a full restart makes those live, so it gates that escalation.
+  const queued = running && !!wantPrimary
   const result = { weaponChanged, theme, running, queued, launchOnly }
   log('apply', preset.name || '(unnamed)', result)
   return result
 }
 
 // ---- global hotkeys -----------------------------------------------------------
+// Apply + configured follow-up + renderer toast, shared by the two background
+// surfaces (global hotkey, tray click). Both happen while the game has focus,
+// so the follow-up is what makes the apply hands-off, and errors have nowhere
+// to surface - the window may be hidden.
+async function applyAndNotify(preset) {
+  try {
+    const result = doApplyPreset(preset)
+    const followUp = await runApplyFollowUp(result)
+    if (win && !win.isDestroyed())
+      win.webContents.send('hotkey-applied', { name: preset.name, ...result, followUp })
+  } catch {
+    // install missing mid-session - nothing sane to do in the background
+  }
+}
+
 function registerHotkeys() {
   globalShortcut.unregisterAll()
   const presets = store.load(userData())
   for (const preset of presets) {
     if (!preset.hotkey) continue
     try {
-      globalShortcut.register(preset.hotkey, async () => {
-        try {
-          // Re-read by id instead of closing over the loaded object: only
-          // delete/setHotkey re-register, so editing a preset (build/update/
-          // updateWeapon/rename) would otherwise leave the hotkey applying the
-          // preset as it looked when hotkeys were last registered.
-          const fresh = store.load(userData()).find((x) => x.id === preset.id)
-          if (!fresh) return
-          const result = doApplyPreset(fresh)
-          // hotkey applies happen while playing, so the game already has focus -
-          // the follow-up is what makes it hands-off
-          const followUp = await runApplyFollowUp(result)
-          if (win && !win.isDestroyed())
-            win.webContents.send('hotkey-applied', { name: fresh.name, ...result, followUp })
-        } catch {
-          // install missing mid-session - nothing sane to do from a hotkey
-        }
+      globalShortcut.register(preset.hotkey, () => {
+        // Re-read by id instead of closing over the loaded object: only
+        // delete/setHotkey re-register, so editing a preset (build/update/
+        // updateWeapon/rename) would otherwise leave the hotkey applying the
+        // preset as it looked when hotkeys were last registered.
+        const fresh = store.load(userData()).find((x) => x.id === preset.id)
+        if (fresh) applyAndNotify(fresh)
       })
     } catch {
       // invalid accelerator string - ignore, the UI validates on record
@@ -627,111 +602,12 @@ function registerHotkeys() {
   }
 }
 
-// ---- scenario auto-switching ----------------------------------------------------
-// The game drops a stats CSV the moment a run ends, and the score screen sits
-// between runs - so that's the window where a preset assigned to the upcoming
-// scenario (preset.scenarios) can land, and the scenario load that follows
-// re-reads weaponsettings.ini and picks it up by itself. In a playlist the
-// upcoming scenario is derived from the playlist definition + this session's
-// CSVs (see upcomingScenario); outside one it's the scenario just played.
-let statsWatcher = null
-const seenCsv = new Map() // filename -> first-seen ms; fs.watch fires several events per file
-
-function armStatsWatcher() {
-  const install = findInstall()
-  const dir = install ? path.join(install, 'stats') : null
-  if (statsWatcher) {
-    if (dir && statsWatcher.kovaDir === dir) return
-    statsWatcher.close()
-    statsWatcher = null
+// Overlay one primary-shaped object's fields onto another, section by section.
+function overlayPrimary(base, overlay) {
+  for (const [section, fields] of Object.entries(overlay)) {
+    if (!base[section]) base[section] = {}
+    Object.assign(base[section], fields)
   }
-  if (!dir || !fs.existsSync(dir)) return
-  try {
-    const w = fs.watch(dir, (_event, filename) => {
-      try {
-        onStatsCsv(String(filename || ''))
-      } catch (e) {
-        log('auto-switch failed', e)
-      }
-    })
-    w.kovaDir = dir
-    w.on('error', () => {
-      // stats folder vanished mid-session (moved library, Steam verify) - drop
-      // the watcher; the 4s tick re-arms it when the folder is back
-      try {
-        w.close()
-      } catch {}
-      if (statsWatcher === w) statsWatcher = null
-    })
-    statsWatcher = w
-  } catch {
-    statsWatcher = null
-  }
-}
-
-function onStatsCsv(filename) {
-  const parsed = k.statsFileScenario(filename)
-  if (!parsed) return
-  // Only a CSV whose filename timestamp is fresh counts as a run ending NOW.
-  // The watcher also fires for OLD files - an AV sweep, Steam Cloud sync or a
-  // "verify integrity" touches thousands of them - and each would otherwise
-  // read as a finished run: log spam at best, a spurious apply at worst.
-  const now = Date.now()
-  if (Math.abs(now - parsed.ts) > 10 * 60_000) return
-  // one new CSV -> several watch events; first one wins, the rest drop
-  for (const [f, at] of seenCsv) if (now - at > 5 * 60_000) seenCsv.delete(f)
-  if (seenCsv.has(filename)) return
-  seenCsv.set(filename, now)
-
-  const install = findInstall()
-  if (!install) return
-  const presets = store.load(userData())
-  // log every detected run even with no rules - "did it see my run at all?" is
-  // the first question when auto-apply seems dead
-  if (!presets.some((p) => Array.isArray(p.scenarios) && p.scenarios.length)) {
-    log('run ended', parsed.scenario, '(no auto-apply rules)')
-    return
-  }
-  const upcoming = k.upcomingScenario(install, parsed.scenario)
-  const lower = String(upcoming).toLowerCase()
-  const preset = presets.find((p) =>
-    (p.scenarios || []).some((s) => String(s).toLowerCase() === lower)
-  )
-  log('run ended', parsed.scenario, '- upcoming', upcoming, preset ? `-> ${preset.name}` : '(no preset assigned)')
-  if (!preset) return
-  const result = doApplyPreset(preset)
-  // NEVER a follow-up here: the player sits on the score screen mid-playlist,
-  // and a scenario re-enter or restart would hijack the playlist's own
-  // navigation. The scenario load that's about to happen picks the fields up.
-  //
-  // Notify only when something actually changed - grinding the same scenario
-  // re-asserts the same preset every run, and a toast per run is pure noise.
-  if ((result.weaponChanged || result.queued) && win && !win.isDestroyed())
-    win.webContents.send('auto-applied', { name: preset.name, scenario: upcoming, ...result })
-}
-
-// Scenario-name suggestions for the assignment UI: the loaded playlist's list
-// plus recently played ones. Cached like listOptions - it's on the state poll.
-let scenarioSuggestCache = null // { install, at, value }
-function scenarioSuggestions(install, rescan) {
-  if (
-    rescan ||
-    !scenarioSuggestCache ||
-    scenarioSuggestCache.install !== install ||
-    Date.now() - scenarioSuggestCache.at > OPTIONS_TTL_MS
-  ) {
-    const pl = k.readPlaylistInProgress(install)
-    const names = [
-      ...(pl ? pl.scenarios.map((s) => s.name) : []),
-      ...k.recentScenariosFromStats(install, 40),
-    ]
-    scenarioSuggestCache = {
-      install,
-      at: Date.now(),
-      value: { playlist: pl ? pl.name : '', names: [...new Set(names)] },
-    }
-  }
-  return scenarioSuggestCache.value
 }
 
 // ---- presets migration (v1 flat shape -> nested) ------------------------------
@@ -741,13 +617,9 @@ function loadPresetsMigrated(install) {
   for (const p of presets) {
     if (!p.primary || p.primary.stringSettings) continue
     const flat = p.primary
-    const base = JSON.parse(JSON.stringify(k.readActive(install).primary))
+    const base = JSON.parse(JSON.stringify(k.readPrimary(install)))
     const fromTheme = flat.CurrentThemeName ? k.primaryFromTheme(install, flat.CurrentThemeName) : null
-    if (fromTheme)
-      for (const [section, fields] of Object.entries(fromTheme)) {
-        if (!base[section]) base[section] = {}
-        Object.assign(base[section], fields)
-      }
+    if (fromTheme) overlayPrimary(base, fromTheme)
     for (const key of [
       'CurrentThemeName',
       'KillConfirmedSound',
@@ -773,9 +645,9 @@ function loadPresetsMigrated(install) {
     if (String(p.weapon?.OverrideSens).toLowerCase() !== 'true' || h == null || h === '') continue
     const sens = Number(h)
     if (!Number.isFinite(sens) || sens <= 0) continue
-    if (!active) active = k.readActive(install)
+    if (!active) active = { primary: k.readPrimary(install) }
     p.primary = p.primary || {}
-    k.setSensPick(p.weapon, p.primary, sens, k.sensScaleOf(p.primary, { primary: active.primary }))
+    k.setSensPick(p.weapon, p.primary, sens, k.sensScaleOf(p.primary, active))
     changed = true
   }
   if (changed) store.save(userData(), presets)
@@ -789,16 +661,7 @@ function trayMenu() {
   const presets = store.load(userData())
   const items = presets.slice(0, 12).map((p) => ({
     label: p.hotkey ? `${p.name}  (${p.hotkey})` : p.name,
-    click: async () => {
-      try {
-        const result = doApplyPreset(p)
-        const followUp = await runApplyFollowUp(result)
-        if (win && !win.isDestroyed())
-          win.webContents.send('hotkey-applied', { name: p.name, ...result, followUp })
-      } catch {
-        // install missing - the window surfaces this, a tray click can't
-      }
-    },
+    click: () => applyAndNotify(p),
   }))
   return Menu.buildFromTemplate([
     ...(items.length ? items : [{ label: 'No presets yet', enabled: false }]),
@@ -838,7 +701,6 @@ function readActiveMerged(install) {
     if (pending.primary && active.primary)
       for (const [section, fields] of Object.entries(pending.primary))
         active.primary[section] = { ...(active.primary[section] || {}), ...fields }
-    if (pending.palette != null) active.palette = pending.palette
     if (pending.ui != null) active.ui = pending.ui
     if (pending.weapon) active.weapon = { ...active.weapon, ...pending.weapon }
   }
@@ -847,15 +709,12 @@ function readActiveMerged(install) {
 
 ipcMain.handle('state', (_e, opts) => {
   const install = findInstall(opts?.rescan)
-  if (opts?.rescan) armStatsWatcher()
   if (!install) return { install: null }
   const { active, pending } = readActiveMerged(install)
   return {
     install,
     gameRunning: gameRunning(),
     active,
-    // playlist + recent scenarios, for the auto-apply assignment UI
-    scenarios: scenarioSuggestions(install, opts?.rescan),
     // What the proxy theme file actually holds - the renderer matches theme
     // identity against this while the game is on the proxy, because the game
     // rewrites PrimaryUserSettings.json from launch-time memory and its theme
@@ -873,7 +732,8 @@ ipcMain.handle('state', (_e, opts) => {
 ipcMain.handle('presets:capture', (_e, name) => {
   const install = requireInstall()
   const presets = store.load(userData())
-  presets.push({ id: store.newId(), name: name || 'New preset', ...readActiveMerged(install).active })
+  const { active } = readActiveMerged(install)
+  presets.push({ id: store.newId(), name: name || 'New preset', weapon: active.weapon, primary: active.primary })
   store.save(userData(), presets)
   return presets
 })
@@ -891,23 +751,19 @@ function dropStaleMaterialIndices(primary) {
 // Sens/DPI both need a positive number; an empty field means "keep current".
 const validPick = (v) => v != null && Number.isFinite(Number(v)) && Number(v) > 0
 
-ipcMain.handle('presets:build', (_e, picks) => {
-  const install = requireInstall()
-  const { active } = readActiveMerged(install)
-  const weapon = { ...active.weapon }
+// Overlay the builder's picks onto a weapon+primary pair, mutating both - the
+// shared half of preset create (onto a snapshot of the active setup) and preset
+// edit (onto the preset's own data). Empty pick = keep. `activeForScale` gives
+// a sens pick its scale when `primary` carries none of its own.
+function applyPicks(install, weapon, primary, picks, activeForScale) {
   if (picks.crosshair) weapon.CrosshairFile = picks.crosshair
   if (picks.crosshairScale > 0) weapon.CrosshairScale = String(picks.crosshairScale)
   if (picks.crosshairColor) weapon.CrosshairColor = picks.crosshairColor
   if (picks.bodyHit != null) weapon.BodyHitSound = picks.bodyHit
-
-  const primary = JSON.parse(JSON.stringify(active.primary))
   if (picks.theme) {
     const fromTheme = k.primaryFromTheme(install, picks.theme)
     if (fromTheme) {
-      for (const [section, fields] of Object.entries(fromTheme)) {
-        if (!primary[section]) primary[section] = {}
-        Object.assign(primary[section], fields)
-      }
+      overlayPrimary(primary, fromTheme)
       dropStaleMaterialIndices(primary)
     }
   }
@@ -921,23 +777,23 @@ ipcMain.handle('presets:build', (_e, picks) => {
   }
   // after the theme overlay, so a theme pick can't drop the sens fields
   if (validPick(picks.sens))
-    k.setSensPick(weapon, primary, Number(picks.sens), k.sensScaleOf(primary, active))
+    k.setSensPick(weapon, primary, Number(picks.sens), k.sensScaleOf(primary, activeForScale))
+}
 
+ipcMain.handle('presets:build', (_e, picks) => {
+  const install = requireInstall()
+  const { active } = readActiveMerged(install)
+  const weapon = { ...active.weapon }
+  const primary = JSON.parse(JSON.stringify(active.primary))
+  applyPicks(install, weapon, primary, picks, active)
   const presets = store.load(userData())
-  presets.push({
-    id: store.newId(),
-    name: picks.name || 'New preset',
-    weapon,
-    primary,
-    palette: active.palette,
-    ui: active.ui,
-  })
+  presets.push({ id: store.newId(), name: picks.name || 'New preset', weapon, primary })
   store.save(userData(), presets)
   return presets
 })
 
 // Edit an existing preset: same picks shape as presets:build, but applied on
-// top of the preset's own data (empty pick = keep). Palette/HUD stay untouched.
+// top of the preset's own data.
 ipcMain.handle('presets:update', (_e, id, picks) => {
   const install = requireInstall()
   const presets = store.load(userData())
@@ -945,38 +801,8 @@ ipcMain.handle('presets:update', (_e, id, picks) => {
   if (!p) return presets
   if (picks.name) p.name = String(picks.name).slice(0, 80)
   p.weapon = p.weapon || {}
-  if (picks.crosshair) p.weapon.CrosshairFile = picks.crosshair
-  if (picks.crosshairScale > 0) p.weapon.CrosshairScale = String(picks.crosshairScale)
-  if (picks.crosshairColor) p.weapon.CrosshairColor = picks.crosshairColor
-  if (picks.bodyHit != null) p.weapon.BodyHitSound = picks.bodyHit
   p.primary = p.primary || {}
-  if (picks.theme) {
-    const fromTheme = k.primaryFromTheme(install, picks.theme)
-    if (fromTheme) {
-      for (const [section, fields] of Object.entries(fromTheme)) {
-        if (!p.primary[section]) p.primary[section] = {}
-        Object.assign(p.primary[section], fields)
-      }
-      dropStaleMaterialIndices(p.primary)
-    }
-  }
-  if (picks.killSound != null) {
-    if (!p.primary.stringSettings) p.primary.stringSettings = {}
-    p.primary.stringSettings.KillConfirmedSound = picks.killSound
-  }
-  if (validPick(picks.dpi)) {
-    if (!p.primary.integerSettings) p.primary.integerSettings = {}
-    p.primary.integerSettings.DPI = Math.round(Number(picks.dpi))
-  }
-  // after the theme overlay, so a theme pick can't drop the sens fields. An old
-  // preset may carry no scale of its own - fall back to the live one.
-  if (validPick(picks.sens))
-    k.setSensPick(
-      p.weapon,
-      p.primary,
-      Number(picks.sens),
-      k.sensScaleOf(p.primary, readActiveMerged(install).active)
-    )
+  applyPicks(install, p.weapon, p.primary, picks, readActiveMerged(install).active)
   store.save(userData(), presets)
   return presets
 })
@@ -1012,7 +838,6 @@ ipcMain.handle('presets:duplicate', (_e, id) => {
     copy.id = store.newId()
     copy.name = `${copy.name} copy`
     delete copy.hotkey // hotkeys stay unique to the original
-    delete copy.scenarios // ditto - one scenario auto-applies one preset
     presets.splice(i + 1, 0, copy)
     store.save(userData(), presets)
   }
@@ -1022,33 +847,6 @@ ipcMain.handle('presets:duplicate', (_e, id) => {
 ipcMain.handle('presets:reorder', (_e, orderedIds) => {
   const presets = store.load(userData())
   presets.sort((a, b) => orderedIds.indexOf(a.id) - orderedIds.indexOf(b.id))
-  store.save(userData(), presets)
-  return presets
-})
-
-// Assign the scenarios a preset auto-applies for. One scenario drives one
-// preset, so assigning it here steals it from any other preset (the hotkey
-// rule). Names arrive from filenames or typing - plain strings, capped.
-ipcMain.handle('presets:setScenarios', (_e, id, scenarios) => {
-  // dedupe case-insensitively - matching is case-insensitive too, so "Pasu"
-  // and "pasu" would otherwise be two stored entries driving one scenario
-  const byLower = new Map()
-  for (const s of Array.isArray(scenarios) ? scenarios : []) {
-    const name = String(s).replace(/[\r\n\t]+/g, ' ').trim().slice(0, 120)
-    if (name && !byLower.has(name.toLowerCase())) byLower.set(name.toLowerCase(), name)
-  }
-  const clean = [...byLower.values()].slice(0, 50)
-  const lower = new Set(clean.map((s) => s.toLowerCase()))
-  const presets = store.load(userData())
-  for (const p of presets) {
-    if (p.id === id) {
-      if (clean.length) p.scenarios = clean
-      else delete p.scenarios
-    } else if (p.scenarios) {
-      p.scenarios = p.scenarios.filter((s) => !lower.has(String(s).toLowerCase()))
-      if (!p.scenarios.length) delete p.scenarios
-    }
-  }
   store.save(userData(), presets)
   return presets
 })
@@ -1092,10 +890,10 @@ ipcMain.handle('proxy:ensure', () => {
   const install = findInstall()
   if (!install) return { ok: false, error: "KovaaK's install not found." }
   try {
-    const dir = path.join(install, 'Saved', 'SaveGames', 'Themes')
-    fs.mkdirSync(dir, { recursive: true })
-    if (fs.existsSync(path.join(dir, `${k.PROXY_THEME}.json`))) return { ok: true, existed: true }
-    k.writeProxyTheme(install, k.readActive(install).primary)
+    const p = k.paths(install)
+    fs.mkdirSync(p.themes, { recursive: true })
+    if (fs.existsSync(p.proxy)) return { ok: true, existed: true }
+    k.writeProxyTheme(install, k.readPrimary(install))
     return { ok: true, existed: false }
   } catch {
     return { ok: false, error: 'Could not create the proxy theme file.' }
@@ -1115,7 +913,9 @@ ipcMain.handle('win:close', () => win?.close()) // routes through close-to-tray
 // fragile (Windows file:// casing, transient getURL()).
 ipcMain.handle('win:reload', () => win?.webContents.reload())
 
-ipcMain.handle('settings:get', () => loadSettings())
+// applyMode goes out RESOLVED (the stored value may be absent pre-migration, see
+// applyMode()) so the renderer never re-implements the autoRestart fallback.
+ipcMain.handle('settings:get', () => ({ ...loadSettings(), applyMode: applyMode() }))
 
 ipcMain.handle('settings:set', (_e, patch) => {
   const s = { ...loadSettings(), ...patch }
@@ -1134,10 +934,10 @@ ipcMain.handle('presets:export', async (_e, id) => {
     filters: [{ name: 'KovaPreset', extensions: ['json'] }],
   })
   if (canceled || !filePath) return { ok: false, canceled: true }
-  // ids are local, hotkeys and scenario assignments are personal - none of
-  // them belong in a shared file (imports also ignore them; an imported preset
-  // must never start applying itself)
-  const out = chosen.map(({ id: _id, hotkey: _hk, scenarios: _sc, ...rest }) => rest)
+  // ids are local and hotkeys are personal - neither belongs in a shared file
+  // (imports ignore them too). Dead fields from older stores never get here:
+  // store.load strips them.
+  const out = chosen.map(({ id: _id, hotkey: _hk, ...rest }) => rest)
   fs.writeFileSync(filePath, JSON.stringify({ kovapreset: 1, presets: out }, null, 2))
   return { ok: true, count: out.length }
 })
@@ -1165,8 +965,6 @@ ipcMain.handle('presets:import', async () => {
       name: String(p.name || 'Imported preset').slice(0, 80),
       weapon: p.weapon && typeof p.weapon === 'object' ? p.weapon : {},
       primary: p.primary && typeof p.primary === 'object' ? p.primary : {},
-      palette: store.validPalette(p.palette) ? p.palette : null,
-      ui: store.validUi(p.ui) ? p.ui : null,
     })
     count++
   }
@@ -1180,7 +978,10 @@ ipcMain.handle('hud:save', (_e, uiRaw) => {
   // hudSerialize() always produces valid JSON, so this only ever fires on a
   // renderer bug - but a corrupt UI.json breaks the player's in-game HUD, and
   // that's not worth trusting a caller for.
-  if (!store.validUi(uiRaw)) return { status: 'invalid' }
+  if (!k.validUi(uiRaw)) return { status: 'invalid' }
+  // The HUD editor writes UI.json directly, so "Restore original setup" must
+  // have the pre-KovaPresets layout on file before the first save lands.
+  captureBaselineIfMissing(install)
   if (gameRunning()) {
     const pending = readPending() || {}
     setPending({ ...pending, ui: uiRaw })
@@ -1239,11 +1040,7 @@ app.whenReady().then(() => {
   initAutoUpdate()
   flushPendingIfPossible()
   registerHotkeys()
-  armStatsWatcher()
-  setInterval(() => {
-    flushPendingIfPossible()
-    armStatsWatcher() // no-op while armed; re-arms after a vanished stats folder
-  }, 4000)
+  setInterval(flushPendingIfPossible, 4000)
   setInterval(pollGameRunning, 3000)
   // legacy storage from the removed per-apply undo system
   fs.rmSync(path.join(userData(), 'backups'), { recursive: true, force: true })

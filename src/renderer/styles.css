@@ -369,11 +369,6 @@ button.ghost {
     transform: rotate(360deg);
   }
 }
-button.danger:hover {
-  border-color: var(--danger);
-  color: var(--danger);
-}
-
 /* active setup grid */
 .active-grid {
   display: grid;
@@ -467,9 +462,7 @@ button.danger:hover {
   letter-spacing: 0.5px;
   color: var(--fg-muted);
 }
-.field input[type='text'],
-.scen-input,
-.field select {
+.field input[type='text'] {
   font: inherit;
   color: var(--fg);
   background: var(--surface-raised);
@@ -479,9 +472,7 @@ button.danger:hover {
   outline: none;
   min-width: 0;
 }
-.field input[type='text']:focus,
-.scen-input:focus,
-.field select:focus {
+.field input[type='text']:focus {
   border-color: var(--border-strong);
 }
 /* custom combobox dropdown */
@@ -681,22 +672,6 @@ body.row-dragging * {
   border-radius: var(--radius-pill);
   display: inline-flex;
   cursor: pointer;
-}
-.preset .tile-color input[type='color'] {
-  width: 100%;
-  height: 100%;
-  padding: 0;
-  border: none;
-  background: none;
-  cursor: pointer;
-  border-radius: var(--radius-pill);
-}
-.preset .tile-color input[type='color']::-webkit-color-swatch-wrapper {
-  padding: 0;
-}
-.preset .tile-color input[type='color']::-webkit-color-swatch {
-  border: none;
-  border-radius: var(--radius-pill);
 }
 /* sound preview buttons */
 button.play {
@@ -939,34 +914,6 @@ button.play:hover {
 .xcolor:hover {
   border-color: var(--border-strong);
 }
-.xcolor input[type='color'] {
-  width: 100%;
-  height: 100%;
-  padding: 0;
-  border: none;
-  background: none;
-  cursor: pointer;
-  border-radius: var(--radius-pill);
-}
-.xcolor input[type='color']::-webkit-color-swatch-wrapper {
-  padding: 0;
-}
-.xcolor input[type='color']::-webkit-color-swatch {
-  border: none;
-  border-radius: var(--radius-pill);
-}
-/* Small inline swatch that sits with the crosshair name in a preset summary. */
-.xcolor-sm {
-  width: 18px;
-  height: 18px;
-  padding: 2px;
-}
-.sm-xhair {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
 .preset .apply {
   display: inline-flex;
   align-items: center;
@@ -1655,53 +1602,6 @@ button.play:hover {
 .fold[open] .fold-value {
   display: none;
 }
-.check {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  cursor: pointer;
-  font-size: 13px;
-}
-/* on/off settings render as a pill toggle in the accent colour, not the raw
-   native checkbox (which drew as an unstyled grey square against the dark UI) */
-.check input[type='checkbox'] {
-  appearance: none;
-  -webkit-appearance: none;
-  margin: 0;
-  position: relative;
-  flex: 0 0 auto;
-  width: 34px;
-  height: 20px;
-  border-radius: var(--radius-pill);
-  background: var(--surface-raised);
-  border: 1px solid var(--border-strong);
-  cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease;
-}
-.check input[type='checkbox']::before {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 2px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--fg-muted);
-  transform: translateY(-50%);
-  transition: transform 120ms ease, background 120ms ease;
-}
-.check input[type='checkbox']:checked {
-  background: var(--accent);
-  border-color: var(--accent);
-}
-.check input[type='checkbox']:checked::before {
-  transform: translate(14px, -50%);
-  background: var(--accent-contrast);
-}
-.check input[type='checkbox']:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
-  outline-offset: 2px;
-}
 .settings-row .muted {
   font-size: 12px;
 }
@@ -1709,7 +1609,7 @@ button.play:hover {
 /* Pick-one settings render as stacked cards rather than a row of native radios:
    the three labels are long enough that inline ones wrapped mid-option, which
    made it unclear which text belonged to which button. The selected card carries
-   the accent, same language as the .check toggle above. */
+   the accent. */
 .opt-list {
   display: grid;
   gap: 6px;
@@ -1798,96 +1698,4 @@ button.play:hover {
     opacity: 0;
     transform: translate(-50%, 8px);
   }
-}
-
-/* ---- scenario auto-apply ------------------------------------------------------ */
-/* Row button lights up when the preset has scenarios assigned, with a count so
-   a glance tells "this one drives part of my playlist". */
-.preset .scen {
-  position: relative;
-}
-.preset .scen.scen-on {
-  opacity: 1;
-  color: var(--accent);
-}
-.preset .scen.scen-on:hover {
-  color: var(--accent);
-}
-.scen-count {
-  position: absolute;
-  top: -3px;
-  right: -4px;
-  min-width: 13px;
-  height: 13px;
-  padding: 0 3px;
-  border-radius: var(--radius-pill);
-  background: var(--accent);
-  color: var(--accent-contrast);
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 13px;
-  text-align: center;
-}
-.modal-scen {
-  width: min(520px, calc(100vw - 48px));
-}
-.modal-scen h3 {
-  font-family: 'Fraunces', Georgia, serif;
-  font-size: 17px;
-  margin-bottom: 8px;
-}
-.scen-intro {
-  font-size: 13px;
-  color: var(--fg-subtle);
-  line-height: 1.45;
-}
-.scen-playlist {
-  margin-top: 6px;
-  font-size: 12px;
-  color: var(--fg-muted);
-}
-.scen-add {
-  display: flex;
-  gap: 8px;
-  margin-top: 12px;
-}
-.scen-add .scen-input {
-  flex: 1;
-}
-.scen-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 10px;
-  max-height: 180px;
-  overflow-y: auto;
-}
-.scen-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 5px 3px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  font-size: 12px;
-}
-.scen-x {
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: none;
-  background: none;
-  border-radius: var(--radius-pill);
-  color: var(--fg-muted);
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-}
-.scen-x:hover {
-  color: var(--danger);
-}
-.scen-none {
-  font-size: 12px;
-  color: var(--fg-muted);
 }
