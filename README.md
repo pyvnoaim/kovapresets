@@ -38,8 +38,7 @@ untouched.
 | Hit / kill sounds | On your next scenario load |
 | Scenario sens override + DPI | Sens on scenario load, DPI on next launch |
 | Theme (walls, floor, sky, enemy colors) | Live, once you open the game's settings screen |
-| HUD colors (palette) | Live, once you open the game's settings screen |
-| HUD window layout | When the game next starts or quits |
+| HUD window layout, palette | When the game next starts or quits |
 
 Beyond switching presets:
 

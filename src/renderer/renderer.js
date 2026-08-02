@@ -1222,9 +1222,7 @@ async function applyPreset(preset) {
       : ''
     const lead = `${failed}${live}${restartNote}`.trim()
     if (theme === 'live') {
-      // covers theme AND palette - both land on the same gesture, and this branch
-      // is reached by either
-      toast(`${lead} <b>Open KovaaK's settings once and theme & HUD colors apply.</b>`.trim(), failed ? 'warn' : 'ok', 6500, reenter)
+      toast(`${lead} <b>Theme: open KovaaK's settings once and it applies.</b>`.trim(), failed ? 'warn' : 'ok', 6500, reenter)
     } else if (theme === 'arming') {
       toast(
         `${lead} Theme is staged - <b>select the "!KovaPreset" theme (top of KovaaK's theme list) once</b>; after that, theme changes apply when you open settings.`.trim(),
@@ -1233,7 +1231,7 @@ async function applyPreset(preset) {
         reenter
       )
     } else if (theme === 'queued') {
-      toast(`${lead} HUD layout changes apply when you quit KovaaK's.`.trim(), 'warn', 6000, reenter)
+      toast(`${lead} Layout/palette changes apply when you quit KovaaK's.`.trim(), 'warn', 6000, reenter)
     } else if (theme === 'applied') {
       toast(`Applied. ${lead || "Theme is set for your next KovaaK's launch."}`.trim(), 'ok', 3600, reenter)
     } else if (lead) {
@@ -1611,7 +1609,7 @@ $('#deactivate').addEventListener('click', async () => {
   if (!res.ok) return toast(esc(res.error || 'Nothing to restore.'), 'warn')
   toast(
     res.queued
-      ? "Original setup restored. Theme & HUD layout finish restoring when you quit KovaaK's; crosshair, sounds & HUD colors are already back."
+      ? "Original setup restored. Theme/layout finish restoring when you quit KovaaK's; crosshair & sounds are already back."
       : 'Original setup restored - everything is as it was before KovaPresets.',
     'ok'
   )
@@ -1630,7 +1628,7 @@ window.kova.onHotkeyApplied(({ name, theme, weaponChanged, followUp, launchOnly 
   else if (followUp?.mode === 'reenter' && followUp.ok) bits.push('scenario re-entered, changes are live')
   else if (weaponChanged) bits.push('crosshair/sounds live on scenario re-entry')
   if (!(followUp?.mode === 'restart' && followUp.ok)) {
-    if (theme === 'live') bits.push('theme & HUD colors apply when you open settings')
+    if (theme === 'live') bits.push('theme applies when you open settings')
     else if (theme === 'arming') bits.push('select the !KovaPreset theme in the menu once')
     // hotkey applies happen mid-session, so this is exactly where a silently
     // unapplied sens would bite - name the value so it can be typed in-game
