@@ -468,7 +468,9 @@ function deactivatePresets() {
     if (palette != null) pending.palette = palette
     if (ui != null) pending.ui = ui
     setPending(pending)
-    queued = primaryRaw != null || palette != null || ui != null
+    // live now, re-asserted at quit - same reasoning as the apply path
+    if (palette != null) k.applyPalette(install, palette)
+    queued = primaryRaw != null || ui != null
   } else {
     clearPending() // same reasoning - drop any not-yet-flushed preset intents
     if (primaryRaw != null)
@@ -579,8 +581,14 @@ function doApplyPreset(preset) {
     if (preset.palette == null && prev.palette != null) next.palette = prev.palette
     if (preset.ui == null && prev.ui != null) next.ui = prev.ui
     setPending(next)
+    // Palette.ini is re-read on the same gestures as the theme (scenario reload,
+    // opening the settings screen), so write it NOW instead of only queueing it.
+    // It stays in the queue as well: the game owns the file in memory and rewrites
+    // it on exit, so the quit flush still has to re-assert it.
+    if (wants.palette != null) k.applyPalette(install, wants.palette)
     if (wants.primary) theme = k.proxyThemeSelected(install) ? 'live' : 'arming'
-    else if (wants.palette != null || wants.ui != null) theme = 'queued'
+    else if (wants.palette != null) theme = 'live'
+    else if (wants.ui != null) theme = 'queued'
   } else if (wants.primary || wants.palette != null || wants.ui != null) {
     if (wants.primary) k.applyPrimary(install, wants.primary)
     if (wants.palette != null) k.applyPalette(install, wants.palette)
@@ -588,9 +596,11 @@ function doApplyPreset(preset) {
     clearPending()
     theme = 'applied'
   }
-  // `queued` = game-owned fields (theme/sens/DPI/palette/HUD) waiting on the game
+  // `queued` = game-owned fields (theme/sens/DPI/HUD layout) waiting on the game
   // to close. Only a full restart makes those live, so it gates that escalation.
-  const queued = running && !!(wants.primary || wants.palette != null || wants.ui != null)
+  // The palette is deliberately NOT in here: it already went in live above, so a
+  // palette-only change must not cost a ~40s relaunch in restart mode.
+  const queued = running && !!(wants.primary || wants.ui != null)
   const result = { weaponChanged, theme, running, queued, launchOnly }
   log('apply', preset.name || '(unnamed)', result)
   return result
@@ -706,7 +716,9 @@ function onStatsCsv(filename) {
   //
   // Notify only when something actually changed - grinding the same scenario
   // re-asserts the same preset every run, and a toast per run is pure noise.
-  if ((result.weaponChanged || result.queued) && win && !win.isDestroyed())
+  // `theme` rather than `queued`: queued no longer covers the palette (it goes
+  // in live), and a silent HUD-color switch mid-playlist is still a switch.
+  if ((result.weaponChanged || result.theme !== 'nochange') && win && !win.isDestroyed())
     win.webContents.send('auto-applied', { name: preset.name, scenario: upcoming, ...result })
 }
 
