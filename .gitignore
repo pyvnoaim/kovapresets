@@ -4,3 +4,4 @@ out/
 *.log
 # personal preset exports saved into the repo folder
 *.kovapreset.json
+.DS_Store
