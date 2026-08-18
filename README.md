@@ -94,6 +94,8 @@ developers allow for external tools. Scenario re-entry uses the official
 
 ## Development
 
+Patches welcome — [CONTRIBUTING.md](CONTRIBUTING.md) has the ground rules.
+
 ```bash
 npm install
 npm start          # run the app
@@ -131,18 +133,11 @@ script re-checks afterwards that the installer, blockmap and `latest.yml` all
 actually landed. If an upload dies half way, `npm run release:publish-only`
 retries just the build-and-upload against the existing release.
 
-Releasing:
-
-```bash
-npm version patch          # or minor / major - bumps package.json and tags
-git push --follow-tags
-GH_TOKEN=<token> npm run release
-```
-
-That builds the installer and publishes it to GitHub Releases along with the
-`latest.yml` manifest, and every installed copy picks the update up within a few
-hours. Push the tag first: publishing a non-draft release for a tag GitHub
-doesn't have yet fails with "Published releases must have a valid tag".
+Requires the GitHub CLI, authenticated (`gh auth login`) — the script takes the
+token from it and hands it to electron-builder. It pushes the commit and tag
+before creating the release: publishing a non-draft release for a tag GitHub
+doesn't have yet fails with "Published releases must have a valid tag". Once
+`latest.yml` lands, installed copies pick the update up within a few hours.
 
 ## License
 

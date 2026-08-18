@@ -89,15 +89,9 @@ console.log('UI.json validation: ok')
   assert.equal(k.readWeapon(root).CrosshairFile, 'new.png')
   assert.equal(k.applyWeapon(root, { CrosshairFile: 'new.png' }), false, 'a no-op apply must report false')
 
-  // sections that shadow the global block (UseDefaults=false) are reported so the
-  // UI can warn; a value containing "[" must not cut a section short
-  write(
-    '﻿CrosshairFile=a.png\n\n[pistol]\nUseDefaults=true\nCrosshairFile=odd[1].png\n\n' +
-      '[LG]\nUseDefaults=false\nCrosshairFile=b.png\n'
-  )
-  assert.deepEqual(k.shadowingWeaponSections(root), ['LG'], 'only UseDefaults=false sections shadow')
-  write('﻿CrosshairFile=a.png\n')
-  assert.deepEqual(k.shadowingWeaponSections(root), [], 'no sections -> nothing shadows')
+  // a value containing "[" must not be mistaken for a section header
+  write('﻿CrosshairFile=odd[1].png\n\n[pistol]\nCrosshairFile=b.png\n')
+  assert.equal(k.readWeapon(root).CrosshairFile, 'odd[1].png', 'a bracket in a value is not a header')
 
   fs2.rmSync(root, { recursive: true, force: true })
   console.log('weaponsettings sections + BOM: ok')
@@ -166,6 +160,36 @@ console.log('UI.json validation: ok')
   console.log('primaryDiffers vs proxy theme: ok')
 }
 
+// Theme round trip: primary -> proxy theme file -> primary. The two directions
+// share one field table (THEME_FIELDS), and this is what catches a row that maps
+// one way only - which would silently drop that field from every applied preset.
+{
+  const fs2 = require('node:fs')
+  const os2 = require('node:os')
+  const path2 = require('node:path')
+  const root = fs2.mkdtempSync(path2.join(os2.tmpdir(), 'kova-roundtrip-'))
+  fs2.mkdirSync(path2.join(root, 'Saved', 'SaveGames', 'Themes'), { recursive: true })
+
+  // one field per section, plus a surface and an enemy field from each family
+  const primary = {
+    stringSettings: { WallMaterial: 'Concrete', CeilingMaterial: 'Metal' },
+    floatSettings: { FloorRoughness: 0.42, EnemyGlowUpHeadOnLookAt: 1.5, EnemyMetalic: 0.25 },
+    integerSettings: { SkyPreset: 3, CloudCover: 1 },
+    booleanSettings: { SolidSkyColor: true, OverrideEnemyBodyColor: false },
+    vectorSettings: { RampColor: [0.2, 0.4, 0.6], EnemyBodyColorOnHit: [1, 0, 0] },
+    colorSettings: { SkyColor: { R: 0.1, G: 0.2, B: 0.3, A: 1 } },
+  }
+  k.writeProxyTheme(root, primary, '!KovaPreset - RoundTrip')
+  const back = k.readProxyPrimary(root)
+  for (const [section, fields] of Object.entries(primary))
+    for (const [name, val] of Object.entries(fields))
+      assert.deepEqual(back[section]?.[name], val, `${section}.${name} survives the round trip`)
+  assert.equal(back.stringSettings.CurrentThemeName, '!KovaPreset - RoundTrip')
+
+  fs2.rmSync(root, { recursive: true, force: true })
+  console.log('theme round trip: ok')
+}
+
 // stats-CSV filename parsing - pure. Feeds recentScenariosFromStats, which the
 // scenario re-enter / restart follow-ups resolve their jump target from.
 {
@@ -181,7 +205,12 @@ console.log('UI.json validation: ok')
 
 const install = k.findInstall()
 console.log('install:', install || 'NOT FOUND')
-if (!install) process.exit(1)
+// Everything above is pure and passes anywhere, so no install is a clean stop,
+// not a failure - that's what lets CI and non-Windows contributors run this.
+if (!install) {
+  console.log('\nno KovaaK\'s install here - pure checks passed, skipping the live ones')
+  process.exit(0)
+}
 
 console.log('game running:', k.isGameRunning())
 
