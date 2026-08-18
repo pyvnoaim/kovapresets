@@ -281,45 +281,58 @@ function drawCrosshairScaled(canvas, file, hex, scale = 1) {
   })
 }
 
+// ---- modal shell ----------------------------------------------------------------
+// Every dialog here is the same thing: a .modal-backdrop that closes on Escape,
+// on Enter, on a backdrop click and on its own .m-ok / .m-cancel buttons. That
+// bookkeeping is easy to get subtly wrong per-copy (a leaked keydown listener, a
+// missing stopPropagation), so it lives here once and the callers only supply a
+// body. `onResult` gets true for Enter/.m-ok and false for Escape/cancel/backdrop.
+// Keys are swallowed while a modal is up - the background listens for Ctrl+R,
+// F12 and hotkey recording, none of which should fire underneath one.
+function openModal(html, onResult = () => {}) {
+  const wrap = document.createElement('div')
+  wrap.className = 'modal-backdrop'
+  wrap.innerHTML = html
+  const done = (ok) => {
+    document.removeEventListener('keydown', onKey, true)
+    wrap.remove()
+    onResult(ok)
+  }
+  const onKey = (e) => {
+    e.stopPropagation()
+    if (e.key === 'Escape') done(false)
+    else if (e.key === 'Enter') done(true)
+  }
+  wrap.addEventListener('mousedown', (e) => {
+    if (e.target === wrap) done(false)
+  })
+  wrap.querySelector('.m-cancel')?.addEventListener('click', () => done(false))
+  wrap.querySelector('.m-ok')?.addEventListener('click', () => done(true))
+  document.addEventListener('keydown', onKey, true)
+  document.body.appendChild(wrap)
+  wrap.querySelector('.m-ok')?.focus()
+  return wrap
+}
+
 // ---- custom confirm (replaces the native OS confirm popup) ---------------------
 function appConfirm(message, { okLabel = 'OK', danger = false } = {}) {
-  return new Promise((resolve) => {
-    const wrap = document.createElement('div')
-    wrap.className = 'modal-backdrop'
-    wrap.innerHTML = `
-      <div class="modal" role="dialog" aria-modal="true">
+  return new Promise((resolve) =>
+    openModal(
+      `<div class="modal" role="dialog" aria-modal="true">
         <p class="modal-msg">${esc(message)}</p>
         <div class="modal-actions">
           <button class="m-cancel">Cancel</button>
           <button class="m-ok${danger ? ' m-danger' : ' primary'}">${esc(okLabel)}</button>
         </div>
-      </div>`
-    const done = (v) => {
-      document.removeEventListener('keydown', onKey, true)
-      wrap.remove()
-      resolve(v)
-    }
-    const onKey = (e) => {
-      e.stopPropagation()
-      if (e.key === 'Escape') done(false)
-      if (e.key === 'Enter') done(true)
-    }
-    wrap.addEventListener('mousedown', (e) => {
-      if (e.target === wrap) done(false)
-    })
-    wrap.querySelector('.m-cancel').addEventListener('click', () => done(false))
-    wrap.querySelector('.m-ok').addEventListener('click', () => done(true))
-    document.addEventListener('keydown', onKey, true)
-    document.body.appendChild(wrap)
-    wrap.querySelector('.m-ok').focus()
-  })
+      </div>`,
+      resolve
+    )
+  )
 }
 
 // ---- help modal -----------------------------------------------------------------
 function showHelp() {
-  const wrap = document.createElement('div')
-  wrap.className = 'modal-backdrop'
-  wrap.innerHTML = `
+  openModal(`
     <div class="modal modal-help" role="dialog" aria-modal="true">
       <h3>How it works</h3>
       <ul>
@@ -332,24 +345,7 @@ function showHelp() {
         <li><b>One rule:</b> while a preset is applied, change these settings here, not in KovaaK's, or the game overwrites them.</li>
       </ul>
       <div class="modal-actions"><button class="m-ok primary">Got it</button></div>
-    </div>`
-  const done = () => {
-    document.removeEventListener('keydown', onKey, true)
-    wrap.remove()
-  }
-  const onKey = (e) => {
-    if (e.key === 'Escape' || e.key === 'Enter') {
-      e.stopPropagation()
-      done()
-    }
-  }
-  wrap.addEventListener('mousedown', (e) => {
-    if (e.target === wrap) done()
-  })
-  wrap.querySelector('.m-ok').addEventListener('click', done)
-  document.addEventListener('keydown', onKey, true)
-  document.body.appendChild(wrap)
-  wrap.querySelector('.m-ok').focus()
+    </div>`)
 }
 
 // ---- health check ---------------------------------------------------------------
@@ -393,8 +389,19 @@ async function runHealth({ autoOpen = false } = {}) {
   const btn = $('#health')
   btn.classList.toggle('health-fail', h.status === 'fail')
   if (h.status !== 'fail') healthAutoShown = false // re-arm once things recover
+  // "No install" is the one failure the app already states in full, as the
+  // #not-found panel filling the window - popping a modal on top of it to say
+  // the same thing is just a dialog to dismiss. The heart still turns red.
+  const onlyMissingInstall = h.checks.every((c) => c.status !== 'fail' || c.id === 'install')
   // Never auto-surface before first-run is settled (the wizard owns that path).
-  if (autoOpen && onboarded && h.status === 'fail' && !healthAutoShown && !anyOverlayOpen()) {
+  if (
+    autoOpen &&
+    onboarded &&
+    h.status === 'fail' &&
+    !onlyMissingInstall &&
+    !healthAutoShown &&
+    !anyOverlayOpen()
+  ) {
     healthAutoShown = true
     showHealth()
   }
@@ -403,9 +410,7 @@ async function runHealth({ autoOpen = false } = {}) {
 
 async function showHealth() {
   if (document.querySelector('.modal-health')) return
-  const wrap = document.createElement('div')
-  wrap.className = 'modal-backdrop'
-  wrap.innerHTML = `
+  const wrap = openModal(`
     <div class="modal modal-health" role="dialog" aria-modal="true">
       <h3>Health check</h3>
       <ul class="h-list"><li class="muted">Running checks…</li></ul>
@@ -413,30 +418,13 @@ async function showHealth() {
         <button class="m-recheck">Re-check</button>
         <button class="m-ok primary">Close</button>
       </div>
-    </div>`
+    </div>`)
   const listEl = wrap.querySelector('.h-list')
   const recheck = async () => {
     const h = await runHealth()
     listEl.innerHTML = h ? healthRowsHtml(h.checks) : '<li class="muted">Check failed to run.</li>'
   }
-  const done = () => {
-    document.removeEventListener('keydown', onKey, true)
-    wrap.remove()
-  }
-  const onKey = (e) => {
-    if (e.key === 'Escape' || e.key === 'Enter') {
-      e.stopPropagation()
-      done()
-    }
-  }
-  wrap.addEventListener('mousedown', (e) => {
-    if (e.target === wrap) done()
-  })
   wrap.querySelector('.m-recheck').addEventListener('click', recheck)
-  wrap.querySelector('.m-ok').addEventListener('click', done)
-  document.addEventListener('keydown', onKey, true)
-  document.body.appendChild(wrap)
-  wrap.querySelector('.m-ok').focus()
   recheck()
 }
 
@@ -708,52 +696,55 @@ function isActive(preset, active) {
   return primaryMatches(preset, active, false)
 }
 
-// Quiet meta line under the name: theme · crosshair file · hit sound (+ play).
+// What a preset changes, as data - rendered twice (chips in the row, plain text
+// in its hover tooltip), so the field list lives here once. `key` is the little
+// label chip, `text` the value, `sound` marks the ones that get the sound
+// styling, and `tipOnly` fields appear in the tooltip but not the chip line
+// (there's only room for so many chips).
+function summaryParts(preset) {
+  const parts = []
+  const scale = parseFloat(preset.weapon?.CrosshairScale)
+  const sens = sensOf(preset)
+  const dpi = preset.primary?.integerSettings?.DPI
+  const kill = preset.primary?.stringSettings?.KillConfirmedSound
+  const spawn = preset.primary?.stringSettings?.SpawnSound
+  if (themeName(preset)) parts.push({ text: themeName(preset) })
+  if (crosshair(preset))
+    parts.push({
+      text: noExt(crosshair(preset)),
+      suffix: scale && scale !== 1 ? `${scale}x` : '',
+    })
+  if (sens) parts.push({ key: 'sens', text: round2(Number(sens.value)) })
+  if (dpi != null) parts.push({ key: 'dpi', text: dpi })
+  if (bodyHit(preset)) parts.push({ key: 'hit', text: bodyHit(preset), sound: true })
+  if (kill) parts.push({ key: 'kill', text: kill, sound: true })
+  if (spawn) parts.push({ key: 'spawn', text: spawn, sound: true, tipOnly: true })
+  return parts
+}
+
+// Quiet meta line under the name: theme · crosshair file · hit sound.
 // The crosshair PREVIEW lives in the tile at the row start, not here.
 function summaryHtml(preset) {
-  const parts = []
-  const sndChip = (label, name) =>
-    `<span class="sm-val sm-sound"><span class="sm-k">${label}</span><span class="sm-name">${esc(name)}</span></span>`
-  if (themeName(preset)) parts.push(`<span class="sm-val">${esc(themeName(preset))}</span>`)
-  if (crosshair(preset)) {
-    const scale = parseFloat(preset.weapon?.CrosshairScale)
-    const scaleTag =
-      scale && scale !== 1 ? ` <span class="sm-k">${esc(String(scale))}x</span>` : ''
-    parts.push(`<span class="sm-val">${esc(noExt(crosshair(preset)))}${scaleTag}</span>`)
-  }
-  const sens = sensOf(preset)
-  if (sens)
-    parts.push(
-      `<span class="sm-val"><span class="sm-k">sens</span>${esc(round2(Number(sens.value)))}</span>`
-    )
-  const dpi = preset.primary?.integerSettings?.DPI
-  if (dpi != null) parts.push(`<span class="sm-val"><span class="sm-k">dpi</span>${esc(dpi)}</span>`)
-  if (bodyHit(preset)) parts.push(sndChip('hit', bodyHit(preset)))
-  const kill = preset.primary?.stringSettings?.KillConfirmedSound
-  if (kill) parts.push(sndChip('kill', kill))
-  // spawn sound deliberately not chipped - it's in the hover tooltip + editor
-  if (!parts.length) return '<span class="sm-empty">no changes</span>'
+  const chips = summaryParts(preset)
+    .filter((p) => !p.tipOnly)
+    .map((p) => {
+      const key = p.key ? `<span class="sm-k">${esc(p.key)}</span>` : ''
+      const suffix = p.suffix ? ` <span class="sm-k">${esc(p.suffix)}</span>` : ''
+      const name = p.sound ? `<span class="sm-name">${esc(p.text)}</span>` : esc(p.text)
+      return `<span class="sm-val${p.sound ? ' sm-sound' : ''}">${key}${name}${suffix}</span>`
+    })
+  if (!chips.length) return '<span class="sm-empty">no changes</span>'
   // inner track so the chips can exceed the row width and be scrolled into view
   // by the marquee (see setupSummaryMarquees) instead of the tail being clipped
-  return `<span class="summary-track">${parts.join('<span class="sm-sep">·</span>')}</span>`
+  return `<span class="summary-track">${chips.join('<span class="sm-sep">·</span>')}</span>`
 }
 
 // Plain-text version of the same summary - the row's hover tooltip, so chips
 // clipped off the one-line summary are still readable.
 function summaryText(preset) {
-  const parts = []
-  if (themeName(preset)) parts.push(themeName(preset))
-  if (crosshair(preset)) parts.push(noExt(crosshair(preset)))
-  const sens = sensOf(preset)
-  if (sens) parts.push(`sens ${round2(Number(sens.value))}`)
-  const dpi = preset.primary?.integerSettings?.DPI
-  if (dpi != null) parts.push(`dpi ${dpi}`)
-  if (bodyHit(preset)) parts.push(`hit ${bodyHit(preset)}`)
-  const kill = preset.primary?.stringSettings?.KillConfirmedSound
-  if (kill) parts.push(`kill ${kill}`)
-  const spawn = preset.primary?.stringSettings?.SpawnSound
-  if (spawn) parts.push(`spawn ${spawn}`)
-  return parts.join(' · ')
+  return summaryParts(preset)
+    .map((p) => [p.key, p.text].filter((s) => s != null && s !== '').join(' '))
+    .join(' · ')
 }
 
 // ---- render -------------------------------------------------------------------
@@ -1541,9 +1532,13 @@ async function boot() {
   }
   setInterval(refresh, 5000)
   try {
+    const hadOnboarded = onboarded
     if (!onboarded) await showWizard()
     onboarded = true
-    await runHealth({ autoOpen: true })
+    // Only auto-surface for someone who skipped onboarding (a returning user
+    // whose setup broke since last time). Straight after the wizard it would
+    // re-open the very checks its step 2 just showed, one click earlier.
+    await runHealth({ autoOpen: hadOnboarded })
   } catch {
     // never let onboarding/health throwing stop the already-running app
   }
