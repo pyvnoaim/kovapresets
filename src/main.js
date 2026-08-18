@@ -64,14 +64,9 @@ function gameRunningNow() {
   return gameRunningCache
 }
 function pollGameRunning() {
-  execFile(
-    'tasklist',
-    ['/FI', 'IMAGENAME eq FPSAimTrainer.exe', '/NH'],
-    { windowsHide: true },
-    (err, out) => {
-      gameRunningCache = !err && /FPSAimTrainer\.exe/i.test(String(out))
-    }
-  )
+  execFile('tasklist', k.TASKLIST_ARGS, { windowsHide: true }, (err, out) => {
+    gameRunningCache = !err && k.tasklistSaysRunning(out)
+  })
 }
 
 let optionsCache = null // { install, at, value }
@@ -177,7 +172,10 @@ function loadSettings() {
   }
 }
 function saveSettings(s) {
-  fs.writeFileSync(settingsFile(), JSON.stringify(s, null, 2))
+  // atomic like every other store: a torn write here reads back as invalid JSON,
+  // which loadSettings turns into defaults - re-running the first-run wizard and
+  // silently resetting the apply mode
+  k.writeFileAtomic(settingsFile(), JSON.stringify(s, null, 2))
 }
 
 // ---- scenario re-enter ----------------------------------------------------------
@@ -229,7 +227,7 @@ function closeGame() {
   // pending flush lands after it exits so our values win. A force kill risks
   // losing the player's unsaved stats for no benefit.
   return new Promise((resolve) => {
-    execFile('taskkill', ['/IM', 'FPSAimTrainer.exe'], { windowsHide: true }, () => resolve())
+    execFile('taskkill', ['/IM', k.GAME_EXE], { windowsHide: true }, () => resolve())
   })
 }
 
@@ -237,16 +235,11 @@ function waitForExit() {
   return new Promise((resolve) => {
     const started = Date.now()
     const tick = () => {
-      execFile(
-        'tasklist',
-        ['/FI', 'IMAGENAME eq FPSAimTrainer.exe', '/NH'],
-        { windowsHide: true },
-        (err, out) => {
-          if (err || !/FPSAimTrainer\.exe/i.test(String(out))) return resolve(true)
-          if (Date.now() - started > CLOSE_TIMEOUT_MS) return resolve(false)
-          setTimeout(tick, CLOSE_POLL_MS)
-        }
-      )
+      execFile('tasklist', k.TASKLIST_ARGS, { windowsHide: true }, (err, out) => {
+        if (err || !k.tasklistSaysRunning(out)) return resolve(true)
+        if (Date.now() - started > CLOSE_TIMEOUT_MS) return resolve(false)
+        setTimeout(tick, CLOSE_POLL_MS)
+      })
     }
     tick()
   })
@@ -506,7 +499,7 @@ function doApplyPreset(preset) {
   const primaryChanged = k.primaryDiffers(install, preset.primary)
   let primaryIntent = null
   if (preset.primary) {
-    primaryIntent = JSON.parse(JSON.stringify(preset.primary))
+    primaryIntent = structuredClone(preset.primary)
     if (!primaryIntent.stringSettings) primaryIntent.stringSettings = {}
     if (primaryChanged) {
       // The proxy's name mirrors the preset's theme so overlays and the in-game
@@ -617,7 +610,7 @@ function loadPresetsMigrated(install) {
   for (const p of presets) {
     if (!p.primary || p.primary.stringSettings) continue
     const flat = p.primary
-    const base = JSON.parse(JSON.stringify(k.readPrimary(install)))
+    const base = structuredClone(k.readPrimary(install))
     const fromTheme = flat.CurrentThemeName ? k.primaryFromTheme(install, flat.CurrentThemeName) : null
     if (fromTheme) overlayPrimary(base, fromTheme)
     for (const key of [
@@ -682,7 +675,16 @@ function trayMenu() {
 
 function createTray() {
   // the website's favicon (multi-frame .ico) - Windows picks the right size itself
-  tray = new Tray(path.join(__dirname, 'assets', 'tray.ico'))
+  try {
+    tray = new Tray(path.join(__dirname, 'assets', 'tray.ico'))
+  } catch (e) {
+    // The .ico doesn't decode off Windows, and this used to throw straight out of
+    // whenReady - taking auto-update, the pending flush and hotkey registration
+    // with it, leaving a macOS/Linux dev run half-booted with no visible reason.
+    // The app is shipped for Windows; elsewhere it just runs without a tray.
+    log('tray unavailable (expected off Windows)', e)
+    return
+  }
   tray.setToolTip('KovaPresets')
   tray.on('click', showWindow)
   tray.on('right-click', () => tray.popUpContextMenu(trayMenu()))
@@ -784,7 +786,7 @@ ipcMain.handle('presets:build', (_e, picks) => {
   const install = requireInstall()
   const { active } = readActiveMerged(install)
   const weapon = { ...active.weapon }
-  const primary = JSON.parse(JSON.stringify(active.primary))
+  const primary = structuredClone(active.primary)
   applyPicks(install, weapon, primary, picks, active)
   const presets = store.load(userData())
   presets.push({ id: store.newId(), name: picks.name || 'New preset', weapon, primary })
@@ -834,7 +836,7 @@ ipcMain.handle('presets:duplicate', (_e, id) => {
   const presets = store.load(userData())
   const i = presets.findIndex((x) => x.id === id)
   if (i >= 0) {
-    const copy = JSON.parse(JSON.stringify(presets[i]))
+    const copy = structuredClone(presets[i])
     copy.id = store.newId()
     copy.name = `${copy.name} copy`
     delete copy.hotkey // hotkeys stay unique to the original

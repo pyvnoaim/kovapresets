@@ -190,32 +190,6 @@ const BOM = '﻿'
 const splitBom = (raw) =>
   raw.startsWith(BOM) ? { bom: BOM, body: raw.slice(BOM.length) } : { bom: '', body: raw }
 
-// Per-weapon sections that OVERRIDE the global block (UseDefaults=false). These
-// are the player's own per-weapon overrides; we never write them, but a preset's
-// crosshair/sound/sens will not reach scenarios whose weapon has one, so callers
-// surface them rather than letting a preset look silently broken.
-function shadowingWeaponSections(install) {
-  const p = paths(install)
-  if (!fs.existsSync(p.weapon)) return []
-  const { body: raw } = splitBom(fs.readFileSync(p.weapon, 'utf8'))
-  // Split on line-anchored headers rather than "up to the next [": a VALUE
-  // containing a bracket (a sound or crosshair filename can) would otherwise cut
-  // a section short and hide its UseDefaults line.
-  let current = null
-  const bodies = new Map()
-  for (const line of raw.slice(weaponGlobalEnd(raw)).split(/\r?\n/)) {
-    const header = line.match(/^\[([^\]\r\n]+)\]\s*$/)
-    if (header) {
-      current = header[1]
-      bodies.set(current, [])
-    } else if (current) bodies.get(current).push(line)
-  }
-  const out = []
-  for (const [name, lines] of bodies)
-    if (!lines.some((l) => /^UseDefaults=true\s*$/.test(l))) out.push(name)
-  return out
-}
-
 function readWeapon(install) {
   const p = paths(install)
   const { body } = splitBom(fs.existsSync(p.weapon) ? fs.readFileSync(p.weapon, 'utf8') : '')
@@ -387,54 +361,57 @@ function primaryFromTheme(install, themeName) {
   return themeToPrimary(t)
 }
 
+// The theme-file <-> primary-settings field map, in one place because the two
+// directions have to stay exact inverses: primaryFromTheme reads a theme with
+// it, writeProxyTheme writes one back with it, and a field present in only one
+// direction silently drops out of every applied preset. Rows are
+// [themeFileKey, section, primaryName]; `themeName` is deliberately absent -
+// it's the proxy's selection identity, passed in explicitly (see PROXY_THEME).
+const THEME_FIELDS = [
+  ['skyPresetId', 'integerSettings', 'SkyPreset'],
+  ['cloudCoverId', 'integerSettings', 'CloudCover'],
+  ['solidSkyColor', 'booleanSettings', 'SolidSkyColor'],
+  ['sunVisible', 'booleanSettings', 'ShowSunInSkybox'],
+  ['skyColor', 'colorSettings', 'SkyColor'],
+  ...['wall', 'floor', 'ceiling', 'ramp'].flatMap((s) => {
+    const C = s[0].toUpperCase() + s.slice(1)
+    return [
+      [`${s}Material`, 'stringSettings', `${C}Material`],
+      [`${s}Roughness`, 'floatSettings', `${C}Roughness`],
+      [`${s}Metallic`, 'floatSettings', `${C}Metallic`],
+      [`${s}FullBright`, 'floatSettings', `${C}FullBright`],
+      [`${s}TextureScale`, 'floatSettings', `${C}TextureScale`],
+      [`${s}Tint`, 'vectorSettings', `${C}Color`],
+    ]
+  }),
+  ['overrideEnemyHeadColor', 'booleanSettings', 'OverrideEnemyHeadColor'],
+  ['overrideEnemyBodyColor', 'booleanSettings', 'OverrideEnemyBodyColor'],
+  ['changeEnemyColorOnHit', 'booleanSettings', 'ChangeEnemyColorOnHit'],
+  ['changeEnemyColorOnLookAt', 'booleanSettings', 'ChangeEnemyColorOnLookAt'],
+  ['enemyColorRoughness', 'floatSettings', 'EnemyRoughness'],
+  ['enemyColorMetallic', 'floatSettings', 'EnemyMetalic'], // the game's own typo
+  ['enemyColorFullBright', 'floatSettings', 'EnemyFullBright'],
+  ['enemyHeadColor', 'vectorSettings', 'EnemyHeadColor'],
+  ['enemyHeadColorOnHit', 'vectorSettings', 'EnemyHeadColorOnHit'],
+  ['enemyHeadColorOnLookAt', 'vectorSettings', 'EnemyHeadColorOnLookAt'],
+  ['enemyBodyColor', 'vectorSettings', 'EnemyBodyColor'],
+  ['enemyBodyColorOnHit', 'vectorSettings', 'EnemyBodyColorOnHit'],
+  ['enemyBodyColorOnLookAt', 'vectorSettings', 'EnemyBodyColorOnLookAt'],
+  ['enemyGlowUpHead', 'floatSettings', 'EnemyGlowUpHead'],
+  ['enemyGlowUpBody', 'floatSettings', 'EnemyGlowUpBody'],
+  ['enemyGlowUpHeadOnHit', 'floatSettings', 'EnemyGlowUpHeadOnHit'],
+  ['enemyGlowUpBodyOnHit', 'floatSettings', 'EnemyGlowUpBodyOnHit'],
+  ['enemyGlowUpHeadOnLookAt', 'floatSettings', 'EnemyGlowUpHeadOnLookAt'],
+  ['enemyGlowUpBodyOnLookAt', 'floatSettings', 'EnemyGlowUpBodyOnLookAt'],
+]
+
 // Theme-file object -> primary-settings shape (the subset a theme can carry).
 function themeToPrimary(t) {
-  const out = {
-    stringSettings: {},
-    floatSettings: {},
-    integerSettings: {},
-    booleanSettings: {},
-    vectorSettings: {},
-    colorSettings: {},
-  }
-  const put = (sec, key, val) => {
-    if (val !== undefined) out[sec][key] = val
-  }
-
-  put('stringSettings', 'CurrentThemeName', t.themeName)
-  put('integerSettings', 'SkyPreset', t.skyPresetId)
-  put('integerSettings', 'CloudCover', t.cloudCoverId)
-  put('booleanSettings', 'SolidSkyColor', t.solidSkyColor)
-  put('booleanSettings', 'ShowSunInSkybox', t.sunVisible)
-  put('colorSettings', 'SkyColor', t.skyColor)
-  for (const s of ['wall', 'floor', 'ceiling', 'ramp']) {
-    const C = s[0].toUpperCase() + s.slice(1)
-    put('stringSettings', `${C}Material`, t[`${s}Material`])
-    put('floatSettings', `${C}Roughness`, t[`${s}Roughness`])
-    put('floatSettings', `${C}Metallic`, t[`${s}Metallic`])
-    put('floatSettings', `${C}FullBright`, t[`${s}FullBright`])
-    put('floatSettings', `${C}TextureScale`, t[`${s}TextureScale`])
-    put('vectorSettings', `${C}Color`, t[`${s}Tint`])
-  }
-  put('booleanSettings', 'OverrideEnemyHeadColor', t.overrideEnemyHeadColor)
-  put('booleanSettings', 'OverrideEnemyBodyColor', t.overrideEnemyBodyColor)
-  put('booleanSettings', 'ChangeEnemyColorOnHit', t.changeEnemyColorOnHit)
-  put('booleanSettings', 'ChangeEnemyColorOnLookAt', t.changeEnemyColorOnLookAt)
-  put('floatSettings', 'EnemyRoughness', t.enemyColorRoughness)
-  put('floatSettings', 'EnemyMetalic', t.enemyColorMetallic)
-  put('floatSettings', 'EnemyFullBright', t.enemyColorFullBright)
-  put('vectorSettings', 'EnemyHeadColor', t.enemyHeadColor)
-  put('vectorSettings', 'EnemyHeadColorOnHit', t.enemyHeadColorOnHit)
-  put('vectorSettings', 'EnemyHeadColorOnLookAt', t.enemyHeadColorOnLookAt)
-  put('vectorSettings', 'EnemyBodyColor', t.enemyBodyColor)
-  put('vectorSettings', 'EnemyBodyColorOnHit', t.enemyBodyColorOnHit)
-  put('vectorSettings', 'EnemyBodyColorOnLookAt', t.enemyBodyColorOnLookAt)
-  put('floatSettings', 'EnemyGlowUpHead', t.enemyGlowUpHead)
-  put('floatSettings', 'EnemyGlowUpBody', t.enemyGlowUpBody)
-  put('floatSettings', 'EnemyGlowUpHeadOnHit', t.enemyGlowUpHeadOnHit)
-  put('floatSettings', 'EnemyGlowUpBodyOnHit', t.enemyGlowUpBodyOnHit)
-  put('floatSettings', 'EnemyGlowUpHeadOnLookAt', t.enemyGlowUpHeadOnLookAt)
-  put('floatSettings', 'EnemyGlowUpBodyOnLookAt', t.enemyGlowUpBodyOnLookAt)
+  const out = {}
+  for (const section of Object.keys(PRIMARY_MANAGED)) out[section] = {}
+  if (t.themeName !== undefined) out.stringSettings.CurrentThemeName = t.themeName
+  for (const [themeKey, section, name] of THEME_FIELDS)
+    if (t[themeKey] !== undefined) out[section][name] = t[themeKey]
   return out
 }
 
@@ -514,49 +491,11 @@ function readProxyPrimary(install) {
 // Inverse of primaryFromTheme: build a theme-file object from the preset's
 // primary-shaped fields. Only fields the preset actually has are written.
 function themeFileFromPrimary(primary, name) {
-  const s = primary.stringSettings || {}
-  const f = primary.floatSettings || {}
-  const i = primary.integerSettings || {}
-  const b = primary.booleanSettings || {}
-  const v = primary.vectorSettings || {}
-  const c = primary.colorSettings || {}
   const t = { themeName: name || PROXY_THEME }
-  const put = (key, val) => {
-    if (val !== undefined) t[key] = val
+  for (const [themeKey, section, field] of THEME_FIELDS) {
+    const val = primary[section]?.[field]
+    if (val !== undefined) t[themeKey] = val
   }
-  for (const surf of ['wall', 'floor', 'ceiling', 'ramp']) {
-    const C = surf[0].toUpperCase() + surf.slice(1)
-    put(`${surf}Material`, s[`${C}Material`])
-    put(`${surf}Roughness`, f[`${C}Roughness`])
-    put(`${surf}Metallic`, f[`${C}Metallic`])
-    put(`${surf}FullBright`, f[`${C}FullBright`])
-    put(`${surf}TextureScale`, f[`${C}TextureScale`])
-    put(`${surf}Tint`, v[`${C}Color`])
-  }
-  put('overrideEnemyHeadColor', b.OverrideEnemyHeadColor)
-  put('overrideEnemyBodyColor', b.OverrideEnemyBodyColor)
-  put('changeEnemyColorOnHit', b.ChangeEnemyColorOnHit)
-  put('changeEnemyColorOnLookAt', b.ChangeEnemyColorOnLookAt)
-  put('enemyColorRoughness', f.EnemyRoughness)
-  put('enemyColorMetallic', f.EnemyMetalic)
-  put('enemyColorFullBright', f.EnemyFullBright)
-  put('enemyHeadColor', v.EnemyHeadColor)
-  put('enemyHeadColorOnHit', v.EnemyHeadColorOnHit)
-  put('enemyHeadColorOnLookAt', v.EnemyHeadColorOnLookAt)
-  put('enemyBodyColor', v.EnemyBodyColor)
-  put('enemyBodyColorOnHit', v.EnemyBodyColorOnHit)
-  put('enemyBodyColorOnLookAt', v.EnemyBodyColorOnLookAt)
-  put('enemyGlowUpHead', f.EnemyGlowUpHead)
-  put('enemyGlowUpBody', f.EnemyGlowUpBody)
-  put('enemyGlowUpHeadOnHit', f.EnemyGlowUpHeadOnHit)
-  put('enemyGlowUpBodyOnHit', f.EnemyGlowUpBodyOnHit)
-  put('enemyGlowUpHeadOnLookAt', f.EnemyGlowUpHeadOnLookAt)
-  put('enemyGlowUpBodyOnLookAt', f.EnemyGlowUpBodyOnLookAt)
-  put('skyPresetId', i.SkyPreset)
-  put('cloudCoverId', i.CloudCover)
-  put('solidSkyColor', b.SolidSkyColor)
-  put('sunVisible', b.ShowSunInSkybox)
-  put('skyColor', c.SkyColor)
   return t
 }
 
@@ -885,12 +824,19 @@ function checkHealth(install, { probeWrites = true } = {}) {
 }
 
 // ---- game process -------------------------------------------------------------
+// One definition of "is the game up", because main.js also asks asynchronously
+// (a 3s poll, and the close-and-wait loop) and a drifting filter or match there
+// would read as "closed" and write into a live game.
+const GAME_EXE = 'FPSAimTrainer.exe'
+// frozen: it's shared with main.js's poll and close-wait, and a mutated filter
+// would answer "closed" for a running game - the one direction that writes into
+// a live install
+const TASKLIST_ARGS = Object.freeze(['/FI', `IMAGENAME eq ${GAME_EXE}`, '/NH'])
+const tasklistSaysRunning = (out) => /FPSAimTrainer\.exe/i.test(String(out))
+
 function isGameRunning() {
   try {
-    const out = execFileSync('tasklist', ['/FI', 'IMAGENAME eq FPSAimTrainer.exe', '/NH'], {
-      encoding: 'utf8',
-    })
-    return /FPSAimTrainer\.exe/i.test(out)
+    return tasklistSaysRunning(execFileSync('tasklist', TASKLIST_ARGS, { encoding: 'utf8' }))
   } catch {
     return false
   }
@@ -916,6 +862,9 @@ module.exports = {
   validUi,
   readResolution,
   isGameRunning,
+  GAME_EXE,
+  TASKLIST_ARGS,
+  tasklistSaysRunning,
   PROXY_THEME,
   proxyThemeName,
   readProxyPrimary,
@@ -926,5 +875,4 @@ module.exports = {
   // Exercised only by selftest.js, but they guard real file semantics - keep.
   statsFileScenario,
   weaponDiffers,
-  shadowingWeaponSections,
 }
