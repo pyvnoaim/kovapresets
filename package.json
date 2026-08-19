@@ -1,6 +1,6 @@
 {
   "name": "kovapreset",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "description": "Switch KovaaK's theme / crosshair / sound presets, live while the game is open.",
   "author": "pyvnoaim",
